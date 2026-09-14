@@ -1,0 +1,14 @@
+# These files are authored on Windows. Normalise to LF in the repository so the shell scripts,
+# patches and workflow are byte-identical wherever they are checked out -- a CRLF in a shell script
+# makes bash fail with confusing "command not found" errors, and a CRLF in a patch makes it stop
+# applying.
+* text=auto eol=lf
+
+*.patch  -text
+*.sha256 -text
+
+# Nothing here is expected to be binary, but be explicit for anything that might be added later.
+*.png binary
+*.zip binary
+*.ipa binary
+*.dylib binary

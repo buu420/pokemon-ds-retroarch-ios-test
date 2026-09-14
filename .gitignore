@@ -1,0 +1,7 @@
+# Everything a build produces. /work/ holds the cloned upstream trees, the CMake build tree, the
+# Xcode derived data and the .ipa -- hundreds of megabytes of fetched source and caches, none of it
+# ours. It is excluded from the repository, from MANIFEST.sha256 and from the published package.
+/work/
+__pycache__/
+*.pyc
+.DS_Store
