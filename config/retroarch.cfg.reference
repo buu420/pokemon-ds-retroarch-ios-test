@@ -1,0 +1,14 @@
+# Reference only -- do NOT copy this onto the phone as retroarch.cfg.
+#
+# On iOS these two keys live in ~/.config/retroarch/retroarch.cfg inside the app's sandbox
+# container, which the Files app cannot reach. Set them in the menu instead:
+#
+#   Settings -> Accessibility -> Enable Accessibility
+#   Settings -> Accessibility -> Narrator Speech Speed
+#
+# They are listed here so the exact key names are on the record. Note there is no trailing "d":
+# the cfg key is accessibility_enable, while "accessibility_enabled" is only a menu label and is
+# ignored if written into a cfg file.
+
+accessibility_enable = "true"
+accessibility_narrator_speech_speed = "5"
