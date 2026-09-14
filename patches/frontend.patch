@@ -1,0 +1,590 @@
+diff --git a/accessibility.h b/accessibility.h
+index df965df..9853e69 100644
+--- a/accessibility.h
++++ b/accessibility.h
+@@ -87,6 +87,20 @@ bool accessibility_speak_priority(
+       unsigned accessibility_narrator_speech_speed,
+       const char* speak_text, int priority);
+ 
++/* As above, but carrying RETRO_ACCESSIBILITY_SPEECH_FLAG_* from a core.
++   flags == 0 is identical to accessibility_speak_priority. With flags != 0 the
++   return value is honest: false means the request was NOT spoken. */
++bool accessibility_speak_priority_flags(
++      bool accessibility_enable,
++      unsigned accessibility_narrator_speech_speed,
++      const char* speak_text, int priority, uint64_t flags);
++
++/* Bitmask of RETRO_ACCESSIBILITY_SPEECH_CAP_* for the backend that would serve
++   the next request; 0 when accessibility is off or no backend is available.
++   *backend, when non-NULL, receives a short frontend-owned identifier. */
++uint64_t accessibility_speech_capabilities(
++      bool accessibility_enable, const char **backend);
++
+ access_state_t *access_state_get_ptr(void);
+ 
+ #endif
+diff --git a/frontend/drivers/platform_darwin.m b/frontend/drivers/platform_darwin.m
+index 9891d45..27cae0c 100644
+--- a/frontend/drivers/platform_darwin.m
++++ b/frontend/drivers/platform_darwin.m
+@@ -943,6 +943,61 @@ static bool frontend_darwin_is_narrator_running(void)
+ #endif
+ }
+ 
++/* One synthesizer for the whole process.
++ *
++ * Apple: "The system doesn't automatically retain the speech synthesizer, so you
++ * need to manually retain it until speech concludes." A function-local static is
++ * a strong reference under ARC, so this instance lives as long as the process.
++ *
++ * Sharing it is also what makes queueing possible at all: the utterance queue
++ * belongs to the instance, so a second synthesizer would speak over the first
++ * rather than after it. */
++API_AVAILABLE(macos(10.14), ios(7.0), tvos(9.0))
++static AVSpeechSynthesizer *darwin_speech_synth(void)
++{
++   static dispatch_once_t once;
++   static AVSpeechSynthesizer *synth;
++   dispatch_once(&once, ^{
++      synth = [[AVSpeechSynthesizer alloc] init];
++   });
++   return synth;
++}
++
++/* Builds the utterance the same way for legacy and flagged requests, so the
++ * voice and rate the user already hears cannot drift between the two paths.
++ *
++ * A fresh utterance every time is required, not an optimisation to undo: Apple
++ * documents that "attempting to enqueue the same utterance more than once throws
++ * an exception". */
++API_AVAILABLE(macos(10.14), ios(7.0), tvos(9.0))
++static AVSpeechUtterance *darwin_speech_utterance(int speed,
++      const char *speak_text)
++{
++   NSString          *text;
++   NSString          *language_string = nil;
++   AVSpeechUtterance *utterance;
++   const char        *language;
++
++   if (!speak_text)
++      return nil;
++   /* stringWithUTF8String: returns nil for malformed UTF-8, and passing nil to
++    * speechUtteranceWithString: raises an Objective-C exception, which would
++    * take RetroArch down. For any well-formed text this changes nothing. */
++   if (!(text = [NSString stringWithUTF8String:speak_text]))
++      return nil;
++   if (!(utterance = [AVSpeechUtterance speechUtteranceWithString:text]))
++      return nil;
++
++   utterance.rate  = (float)speed / 10.0f;
++   language        = get_user_language_iso639_1(false);
++   if (language)
++      language_string = [NSString stringWithUTF8String:language];
++   /* voiceWithLanguage: may return nil for a language with no installed voice;
++    * assigning nil selects the system default, which is the existing behaviour. */
++   utterance.voice = [AVSpeechSynthesisVoice voiceWithLanguage:language_string];
++   return utterance;
++}
++
+ static bool frontend_darwin_accessibility_speak(int speed,
+       const char* speak_text, int priority)
+ {
+@@ -953,11 +1008,12 @@ static bool frontend_darwin_accessibility_speak(int speed,
+ 
+    if (@available(macOS 10.14, iOS 7, tvOS 9, *))
+    {
+-      static dispatch_once_t once;
+-      static AVSpeechSynthesizer *synth;
+-      dispatch_once(&once, ^{
+-         synth = [[AVSpeechSynthesizer alloc] init];
+-      });
++      AVSpeechSynthesizer *synth = darwin_speech_synth();
++      AVSpeechUtterance *utterance;
++
++      if (!synth)
++         return false;
++
+       if ([synth isSpeaking])
+       {
+          if (priority < 10)
+@@ -966,17 +1022,134 @@ static bool frontend_darwin_accessibility_speak(int speed,
+             [synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+       }
+ 
+-      AVSpeechUtterance *utterance = [AVSpeechUtterance speechUtteranceWithString:[NSString stringWithUTF8String:speak_text]];
+-      if (!utterance)
++      if (!(utterance = darwin_speech_utterance(speed, speak_text)))
++         return false;
++      [synth speakUtterance:utterance];
++      return true;
++   }
++
++#if defined(OSX)
++   return accessibility_speak_macos(speed, speak_text, priority);
++#else
++   return false;
++#endif
++}
++
++/* ---------------------------------------------------------------------------
++ * Core-driven speech: queue, interrupt and stop.
++ *
++ * flags == 0 keeps the legacy path above untouched, so every existing core and
++ * RetroArch's own menu narration behave exactly as before. Only a core that
++ * negotiated capabilities through
++ * RETRO_ENVIRONMENT_GET_ACCESSIBILITY_SPEECH_INTERFACE sets a flag.
++ * --------------------------------------------------------------------------- */
++
++static uint64_t accessibility_speech_caps_darwin(const char **backend)
++{
++   if (backend)
++      *backend = "none";
++
++   if (@available(macOS 10.14, iOS 7, tvOS 9, *))
++   {
++      if (!darwin_speech_synth())
++         return 0;
++      if (backend)
++         *backend = "avspeech";
++      /* All three are documented behaviour of AVSpeechSynthesizer, not
++       * inference: speak(_:) "adds the utterance you specify to the speech
++       * synthesizer's queue", and when it is already speaking "the synthesizer
++       * adds utterances to a queue and speaks them in the order it receives
++       * them"; stopSpeaking(at:) "immediately cancels speech and removes all
++       * unspoken utterances from the synthesizer's queue". */
++      return RETRO_ACCESSIBILITY_SPEECH_CAP_SPEAK
++           | RETRO_ACCESSIBILITY_SPEECH_CAP_INTERRUPT
++           | RETRO_ACCESSIBILITY_SPEECH_CAP_QUEUE
++           | RETRO_ACCESSIBILITY_SPEECH_CAP_STOP;
++   }
++
++#if defined(OSX)
++   /* The pre-10.14 fallback forks one `say` per line and kills the previous one
++    * before starting the next, so it can speak and nothing more. Advertising
++    * only SPEAK keeps every request on the legacy path with flags == 0, which
++    * is exactly what that path does today. */
++   if (backend)
++      *backend = "say";
++   return RETRO_ACCESSIBILITY_SPEECH_CAP_SPEAK;
++#else
++   return 0;
++#endif
++}
++
++static bool accessibility_speak_ex_darwin(int speed,
++      const char *speak_text, int priority, uint64_t flags)
++{
++   bool want_stop      = (flags & RETRO_ACCESSIBILITY_SPEECH_FLAG_STOP)      != 0;
++   bool want_interrupt = (flags & RETRO_ACCESSIBILITY_SPEECH_FLAG_INTERRUPT) != 0;
++   bool want_queue     = (flags & RETRO_ACCESSIBILITY_SPEECH_FLAG_QUEUE)     != 0;
++
++   /* Legacy requests take the legacy path, unchanged. */
++   if (flags == 0)
++      return frontend_darwin_accessibility_speak(speed, speak_text, priority);
++
++   if (want_stop)
++   {
++      want_interrupt = false;
++      want_queue     = false;
++   }
++   else if (want_interrupt && want_queue)
++   {
++      RARCH_WARN("[Accessibility] Core asked to interrupt and queue at once; interrupting.\n");
++      want_queue     = false;
++   }
++
++   /* Only a stop may arrive without text. */
++   if (!want_stop && (!speak_text || !*speak_text))
++      return false;
++
++   if (speed < 1)
++      speed = 1;
++   else if (speed > 10)
++      speed = 10;
++
++   if (@available(macOS 10.14, iOS 7, tvOS 9, *))
++   {
++      AVSpeechSynthesizer *synth = darwin_speech_synth();
++      AVSpeechUtterance *utterance;
++
++      if (!synth)
++         return false;
++
++      if (want_stop || want_interrupt)
++      {
++         /* isSpeaking is true while speaking *or* while paused with utterances
++          * still queued, so this covers everything a stop has to clear. When
++          * nothing is speaking there is nothing to cancel and the caller's
++          * intent already holds, which is a success, not a failure: the reader
++          * calls stop routinely and must not be told it failed. */
++         if (     [synth isSpeaking]
++               && ![synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate])
++            return false;
++         if (want_stop)
++            return true;
++      }
++
++      /* A queued line is deliberately NOT preceded by a stop; speakUtterance:
++       * appends to the synthesizer's own queue, which is the whole point. The
++       * "something is already speaking" gate the legacy path applies is skipped
++       * as well, because a flag is the core stating its intent, and dropping a
++       * queued line because speech is in progress would defeat queueing. */
++      if (!(utterance = darwin_speech_utterance(speed, speak_text)))
+          return false;
+-      utterance.rate = (float)speed / 10.0f;
+-      const char *language = get_user_language_iso639_1(false);
+-      utterance.voice = [AVSpeechSynthesisVoice voiceWithLanguage:[NSString stringWithUTF8String:language]];
+       [synth speakUtterance:utterance];
+       return true;
+    }
+ 
+ #if defined(OSX)
++   /* Only SPEAK is advertised on this path, so a core that honours the contract
++    * never reaches here with a flag set. If one does anyway, speak the line
++    * rather than lose it, and refuse the stop we genuinely cannot honour. */
++   if (want_stop)
++      return false;
+    return accessibility_speak_macos(speed, speak_text, priority);
+ #else
+    return false;
+@@ -1027,5 +1200,7 @@ frontend_ctx_driver_t frontend_ctx_darwin = {
+    frontend_darwin_accessibility_speak, /* accessibility_speak */
+    NULL,                            /* set_gamemode        */
+    "darwin",                        /* ident               */
+-   NULL                             /* get_video_driver    */
++   NULL,                            /* get_video_driver    */
++   accessibility_speech_caps_darwin, /* accessibility_speech_caps */
++   accessibility_speak_ex_darwin    /* accessibility_speak_ex    */
+ };
+diff --git a/frontend/frontend_driver.h b/frontend/frontend_driver.h
+index b1d9214..0815db5 100644
+--- a/frontend/frontend_driver.h
++++ b/frontend/frontend_driver.h
+@@ -118,6 +118,21 @@ typedef struct frontend_ctx_driver
+    const char *ident;
+ 
+    const struct video_driver *(*get_video_driver)(void);
++
++   /* Appended deliberately at the END of the struct: every platform driver uses
++    * positional initialisers, so anything that does not list these gets NULL and
++    * keeps its existing behaviour. */
++
++   /* Returns a bitmask of RETRO_ACCESSIBILITY_SPEECH_CAP_* for the backend that
++    * would serve the next request, and sets *backend to a short identifier.
++    * NULL means this platform has no capability reporting, i.e. speak-only. */
++   uint64_t (*accessibility_speech_caps)(const char **backend);
++
++   /* Like accessibility_speak, but honours RETRO_ACCESSIBILITY_SPEECH_FLAG_*.
++    * With flags == 0 it must behave exactly like accessibility_speak.
++    * With flags != 0 the return value is honest: false means nothing was said. */
++   bool (*accessibility_speak_ex)(int speed, const char *speak_text,
++         int priority, uint64_t flags);
+ } frontend_ctx_driver_t;
+ 
+ typedef struct
+diff --git a/libretro-common/include/libretro.h b/libretro-common/include/libretro.h
+index 32b732e..d3cdd10 100644
+--- a/libretro-common/include/libretro.h
++++ b/libretro-common/include/libretro.h
+@@ -2072,6 +2072,42 @@ enum retro_mod
+  */
+ #define RETRO_ENVIRONMENT_SET_MESSAGE_EXT 60
+ 
++/**
++ * Speaks text through the frontend's native accessibility/screen-reader path.
++ *
++ * This is intended for cores that can expose semantic game state, such as
++ * spoken menu focus, selected inventory items, or navigation hints. Frontends
++ * should route this through the same platform-specific accessibility backend
++ * used for their own menu narration when available.
++ *
++ * @param[in] data <tt>const struct retro_accessibility_speech *</tt>.
++ * Pointer to the speech request. Behavior is undefined if \c NULL.
++ * @returns \c true if the frontend accepted the request.
++ * @experimental
++ */
++#define RETRO_ENVIRONMENT_ACCESSIBILITY_SPEAK (82 | RETRO_ENVIRONMENT_EXPERIMENTAL)
++
++/**
++ * Asks the frontend what its accessibility speech backend can actually do.
++ *
++ * A core MUST call this before setting any bit of
++ * \c retro_accessibility_speech::flags. A frontend without this extension
++ * returns \c false for the unknown command, so an old frontend can never be
++ * mistaken for one that supports queueing, interrupting or stopping.
++ *
++ * The reported capabilities describe the backend that is selected RIGHT NOW,
++ * not merely what the frontend can parse; they are 0 while the user has
++ * accessibility switched off, and they may change if the frontend falls back
++ * from one backend to another. A core may re-query at any time.
++ *
++ * @param[in,out] data <tt>struct retro_accessibility_speech_interface *</tt>.
++ * The core sets \c size; the frontend fills the remaining fields, writing no
++ * more than \c size bytes.
++ * @returns \c true if the frontend implements this extension.
++ * @experimental
++ */
++#define RETRO_ENVIRONMENT_GET_ACCESSIBILITY_SPEECH_INTERFACE (83 | RETRO_ENVIRONMENT_EXPERIMENTAL)
++
+ /**
+  * Returns the number of active input devices currently provided by the frontend.
+  *
+@@ -5955,6 +5991,98 @@ struct retro_message_ext
+    int8_t progress;
+ };
+ 
++/**
++ * A core-provided accessibility speech request.
++ *
++ * Frontends that support \c RETRO_ENVIRONMENT_ACCESSIBILITY_SPEAK should
++ * route this through the same native accessibility backend used for frontend
++ * menu narration. The frontend should make its own copy of the submitted text.
++ */
++struct retro_accessibility_speech
++{
++   /**
++    * The \c NULL-terminated text to speak. Must not be \c NULL.
++    */
++   const char *text;
++
++   /**
++    * Relative priority. Higher values indicate speech that should interrupt
++    * or replace less important pending speech, matching frontend policy.
++    */
++   int priority;
++
++   /**
++    * Optional channel/source name, such as "menu", "navigation", or "combat".
++    * May be \c NULL.
++    */
++   const char *channel;
++
++   /**
++    * A bitwise OR of \c RETRO_ACCESSIBILITY_SPEECH_FLAG_* values, or 0.
++    *
++    * 0 requests the frontend's legacy behaviour and is always safe. A core
++    * must not set a flag whose matching capability was not reported by
++    * \c RETRO_ENVIRONMENT_GET_ACCESSIBILITY_SPEECH_INTERFACE.
++    */
++   unsigned flags;
++};
++
++/**
++ * Cancel whatever is speaking, and anything pending from this core, then speak
++ * \c text. Requires \c RETRO_ACCESSIBILITY_SPEECH_CAP_INTERRUPT.
++ */
++#define RETRO_ACCESSIBILITY_SPEECH_FLAG_INTERRUPT (1U << 0)
++
++/**
++ * Speak \c text after whatever is already speaking, without cutting it off.
++ * Requires \c RETRO_ACCESSIBILITY_SPEECH_CAP_QUEUE.
++ */
++#define RETRO_ACCESSIBILITY_SPEECH_FLAG_QUEUE     (1U << 1)
++
++/**
++ * Cancel current and pending speech. \c text is ignored and may be \c NULL.
++ * Takes precedence over the other flags. Requires
++ * \c RETRO_ACCESSIBILITY_SPEECH_CAP_STOP.
++ */
++#define RETRO_ACCESSIBILITY_SPEECH_FLAG_STOP      (1U << 2)
++
++/** The frontend can speak at all. Implied by every other capability. */
++#define RETRO_ACCESSIBILITY_SPEECH_CAP_SPEAK      (1ULL << 0)
++/** \c RETRO_ACCESSIBILITY_SPEECH_FLAG_INTERRUPT is honoured. */
++#define RETRO_ACCESSIBILITY_SPEECH_CAP_INTERRUPT  (1ULL << 1)
++/** \c RETRO_ACCESSIBILITY_SPEECH_FLAG_QUEUE is honoured: a queued line does
++ *  not cut off the line before it. Only set by backends that can really do it. */
++#define RETRO_ACCESSIBILITY_SPEECH_CAP_QUEUE      (1ULL << 2)
++/** \c RETRO_ACCESSIBILITY_SPEECH_FLAG_STOP is honoured. */
++#define RETRO_ACCESSIBILITY_SPEECH_CAP_STOP       (1ULL << 3)
++
++/**
++ * What the frontend's current speech backend can do.
++ * @see RETRO_ENVIRONMENT_GET_ACCESSIBILITY_SPEECH_INTERFACE
++ */
++struct retro_accessibility_speech_interface
++{
++   /**
++    * Set by the CORE to \c sizeof(struct retro_accessibility_speech_interface).
++    * The frontend refuses sizes smaller than the version it knows, and never
++    * writes more than this many bytes.
++    */
++   unsigned size;
++
++   /**
++    * Set by the frontend to a bitwise OR of
++    * \c RETRO_ACCESSIBILITY_SPEECH_CAP_* values. May be 0.
++    */
++   uint64_t capabilities;
++
++   /**
++    * Set by the frontend to a short, stable identifier for the active speech
++    * backend, such as "nvda", "sapi", "powershell" or "disabled". Owned by the
++    * frontend and valid until the next call. May be \c NULL.
++    */
++   const char *backend;
++};
++
+ /** @} */
+ 
+ /* Describes how the libretro implementation maps a libretro input bind
+diff --git a/retroarch.c b/retroarch.c
+index b167283..4de0123 100644
+--- a/retroarch.c
++++ b/retroarch.c
+@@ -8813,10 +8813,43 @@ void retroarch_favorites_deinit(void)
+ }
+ 
+ #ifdef HAVE_ACCESSIBILITY
+-bool accessibility_speak_priority(
++uint64_t accessibility_speech_capabilities(
++      bool accessibility_enable, const char **backend)
++{
++   access_state_t *access_st   = access_state_get_ptr();
++   frontend_ctx_driver_t *frontend;
++
++   if (backend)
++      *backend = "none";
++
++   /* Capabilities describe what can be spoken RIGHT NOW. With the narrator
++    * switched off that is nothing, and saying so is the honest answer. */
++   if (!is_accessibility_enabled(accessibility_enable, access_st->enabled))
++   {
++      if (backend)
++         *backend = "disabled";
++      return 0;
++   }
++
++   frontend = frontend_state_get_ptr()->current_frontend_ctx;
++   if (frontend && frontend->accessibility_speech_caps)
++      return frontend->accessibility_speech_caps(backend);
++
++   /* A platform with only the legacy speak hook can speak, nothing more. */
++   if (frontend && frontend->accessibility_speak)
++   {
++      if (backend)
++         *backend = "legacy";
++      return RETRO_ACCESSIBILITY_SPEECH_CAP_SPEAK;
++   }
++
++   return 0;
++}
++
++bool accessibility_speak_priority_flags(
+       bool accessibility_enable,
+       unsigned accessibility_narrator_speech_speed,
+-      const char* speak_text, int priority)
++      const char* speak_text, int priority, uint64_t flags)
+ {
+    access_state_t *access_st   = access_state_get_ptr();
+    if (is_accessibility_enabled(
+@@ -8827,7 +8860,17 @@ bool accessibility_speak_priority(
+       frontend_ctx_driver_t *frontend =
+          frontend_state_get_ptr()->current_frontend_ctx;
+ 
+-      RARCH_DBG("[Accessibility] Spoke: \"%s\".\n", speak_text);
++      RARCH_DBG("[Accessibility] Spoke: \"%s\".\n", speak_text ? speak_text : "");
++
++      if (flags != 0)
++      {
++         /* The caller only sets a flag after we told it the capability exists,
++          * so falling back to a path that cannot honour it would be a lie. */
++         if (frontend && frontend->accessibility_speak_ex)
++            return frontend->accessibility_speak_ex(
++                  accessibility_narrator_speech_speed, speak_text, priority, flags);
++         return false;
++      }
+ 
+       if (frontend && frontend->accessibility_speak)
+          return frontend->accessibility_speak(accessibility_narrator_speech_speed, speak_text,
+@@ -8844,8 +8887,22 @@ bool accessibility_speak_priority(
+ #endif
+ #endif
+    }
++   else if (flags != 0)
++   {
++      /* Nothing was spoken, and a flagged caller is entitled to know. */
++      return false;
++   }
+ 
+    return true;
+ }
+ 
++bool accessibility_speak_priority(
++      bool accessibility_enable,
++      unsigned accessibility_narrator_speech_speed,
++      const char* speak_text, int priority)
++{
++   return accessibility_speak_priority_flags(accessibility_enable,
++         accessibility_narrator_speech_speed, speak_text, priority, 0);
++}
++
+ #endif
+diff --git a/runloop.c b/runloop.c
+index 679517b..2606514 100644
+--- a/runloop.c
++++ b/runloop.c
+@@ -1745,6 +1745,63 @@ bool runloop_environment_cb(unsigned cmd, void *data)
+          break;
+       }
+ 
++      case RETRO_ENVIRONMENT_ACCESSIBILITY_SPEAK:
++      {
++#ifdef HAVE_ACCESSIBILITY
++         const struct retro_accessibility_speech *speech =
++            (const struct retro_accessibility_speech*)data;
++         bool is_stop;
++
++         if (!speech)
++            return false;
++
++         is_stop = (speech->flags & RETRO_ACCESSIBILITY_SPEECH_FLAG_STOP) != 0;
++
++         /* A stop request carries no text by design; everything else must. */
++         if (!is_stop && string_is_empty(speech->text))
++            return false;
++
++         RARCH_DBG("[Environ] ACCESSIBILITY_SPEAK%s%s flags 0x%x: %s\n",
++               speech->channel ? " " : "",
++               speech->channel ? speech->channel : "",
++               speech->flags,
++               speech->text ? speech->text : "");
++
++         return accessibility_speak_priority_flags(
++               settings->bools.accessibility_enable,
++               settings->uints.accessibility_narrator_speech_speed,
++               speech->text,
++               speech->priority,
++               (uint64_t)speech->flags);
++#else
++         return false;
++#endif
++      }
++
++      case RETRO_ENVIRONMENT_GET_ACCESSIBILITY_SPEECH_INTERFACE:
++      {
++#ifdef HAVE_ACCESSIBILITY
++         struct retro_accessibility_speech_interface *iface =
++            (struct retro_accessibility_speech_interface*)data;
++         const char *backend = NULL;
++
++         /* Too small to describe means the caller predates the fields we would
++          * write; refusing is safer than writing past what it allocated. */
++         if (!iface || iface->size < sizeof(struct retro_accessibility_speech_interface))
++            return false;
++
++         iface->capabilities = accessibility_speech_capabilities(
++               settings->bools.accessibility_enable, &backend);
++         iface->backend      = backend;
++
++         RARCH_LOG("[Environ] GET_ACCESSIBILITY_SPEECH_INTERFACE: backend \"%s\", capabilities 0x%x.\n",
++               backend ? backend : "none", (unsigned)iface->capabilities);
++         return true;
++#else
++         return false;
++#endif
++      }
++
+       case RETRO_ENVIRONMENT_SET_MESSAGE_EXT:
+       {
+          const struct retro_message_ext *msg =

@@ -1,0 +1,17 @@
+{
+  "core": {
+    "upstream": "https://github.com/JesseTG/melonds-ds.git",
+    "base": "bc4e4b67d2d470d7c682810a1e892cafd6f9082b",
+    "patch": "patches/core.patch"
+  },
+  "frontend": {
+    "upstream": "https://github.com/libretro/RetroArch.git",
+    "base": "69a4f0ea1e8aaf442ae4858f2e7f2b31a1776576",
+    "patch": "patches/frontend.patch"
+  },
+  "placeholder_reader": {
+    "path": "stub/pokemon_bw_reader.lua",
+    "staged_to": "src/libretro/accessibility/lua/pokemon_bw_reader.lua",
+    "sha256": "3902fbdf16a2f44d1e0384ba0b5d799fe4598ea8044e0707181ada84507c8649"
+  }
+}
