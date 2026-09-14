@@ -8,11 +8,11 @@ Darwin platform driver.
 
 The output is an ad-hoc-signed `.ipa` you install with **AltStore** and a **free Apple account**.
 
-> **Nothing here has been built or tested yet.** A *successful* run of this pipeline would show
-> that both halves compile, that the DS core ends up in the app bundle as a framework, that the
-> corrected core info is inside the bundled assets archive, and that the ad-hoc signature verifies.
-> It would still say nothing about whether the app launches, whether speech is audible, or whether
-> the reader reads. Treat any artifact as a candidate until someone installs it and listens.
+> **iPhone testing is still pending.** [Build 2](https://github.com/buu420/pokemon-ds-retroarch-ios-test/actions/runs/34909462095)
+> compiled and linked both the core and RetroArch, then failed Xcode's validation of the unused
+> widget. The build scripts now remove that widget before compilation. A successful build must
+> still package the core and its info file and pass signature checks. Any resulting IPA remains
+> a test candidate until it is installed and its narration is heard on an iPhone.
 
 ## What is in this repository
 
@@ -126,10 +126,18 @@ account can sign none of them. `AppStore.xcconfig` is also never passed for a se
 sets `APPSTORE_BUILD`, whose build-phase branch runs `rm -f iOS/modules/*.dylib` (deleting the core
 just staged) and then downloads stock cores and assets over the network.
 
-**No widget.** The widget extension is a hard target dependency of the app, so it is always built;
-`make_ipa.sh` removes it from the `Payload` afterwards. That is a packaging-only change and it
-matters, because every embedded extension needs its own App ID and a free account only gets ten per
-seven days. Set `KEEP_APP_EXTENSIONS=1` to keep it.
+**No widget, and it has to go before the build.** The app target declares the widget extension as
+a dependency and embeds the `.appex`; Xcode then runs `ValidateEmbeddedBinary`, which requires the
+embedded binary to carry the parent app's signing certificate. With Xcode signing off and the app
+signed ad-hoc afterwards the widget is unsigned, and that failed a real runner build outright:
+*"Embedded Binary Signing Certificate: Not Code Signed"* vs *"- (Ad Hoc Code Signed)"*. Deleting the
+`.appex` from the `Payload` later cannot help, because validation happens during the build. So
+`scripts/strip_widget_extension.py` removes the dependency and the embed phase from the **ephemeral
+fetched copy** of `project.pbxproj` before `xcodebuild` runs — two lines, both inside the app
+target, with the widget target itself left defined but unreferenced. No signing setting is weakened
+and no source file is touched. It is wanted anyway: every embedded extension needs its own App ID,
+and a free account gets ten per seven days. `KEEP_APP_EXTENSIONS=1` is refused with an explanation
+rather than silently producing a build that cannot be signed.
 
 **A distinct identity.** `APP_BUNDLE_ID` (default `com.example.RetroArchAccess`) is applied through
 `IOS_BUNDLE_IDENTIFIER`, which also drives the widget's id. iOS keys containers by bundle id, so an
