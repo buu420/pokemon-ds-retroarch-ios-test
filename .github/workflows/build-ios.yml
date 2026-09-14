@@ -1,0 +1,170 @@
+name: Build sideloadable iOS ipa
+
+# Builds the accessible melonDS DS core and RetroArch for an iOS device from pinned upstream
+# sources plus the patches in this repository, and uploads an unsigned/ad-hoc .ipa for sideloading
+# with AltStore and a free Apple account.
+#
+# It uses no secrets, no Apple account, no App Store Connect API key and no paid entitlements.
+# The .ipa is uploaded as a workflow artifact. That is not a release, but it is still an upload:
+# in a public repository, anyone who can read the repository can download it.
+#
+# A SUCCESSFUL run would show that both halves compile on a macOS runner, that the DS core ends up
+# in the app bundle as a framework, that the corrected core info is inside the bundled assets
+# archive, and that the ad-hoc signature verifies. It cannot show that the app launches on a phone
+# or that speech is audible. Until someone installs the artifact, none of that is known.
+#
+# The build is not offline: the core's CMake fetches melonDS, libretro-common, embed-binaries,
+# glm, zlib, libslirp, pntr, fmt, yamc, span-lite, date and the Lua 5.4.9 tarball at configure
+# time. The Lua tarball is pinned by SHA256 in the core's own CMake. Nothing downloads a prebuilt
+# RetroArch or a prebuilt core.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: macOS runner image (standard GitHub-hosted labels only)
+        type: choice
+        default: macos-latest
+        options:
+          - macos-latest
+          - macos-15
+          - macos-14
+      bundle_id:
+        description: Bundle identifier for this test build
+        type: string
+        default: com.example.RetroArchAccess
+      display_name:
+        description: Home screen name
+        type: string
+        default: RetroArch Access
+      deployment_target:
+        description: Minimum iOS version for the core and the app
+        type: string
+        default: "14"
+  push:
+    branches: [main]
+    paths:
+      - 'patches/**'
+      - 'scripts/**'
+      - 'stub/**'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: iOS arm64 device build
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
+    timeout-minutes: 120
+
+    env:
+      APP_BUNDLE_ID: ${{ inputs.bundle_id || 'com.example.RetroArchAccess' }}
+      APP_DISPLAY_NAME: ${{ inputs.display_name || 'RetroArch Access' }}
+      IOS_DEPLOYMENT_TARGET: ${{ inputs.deployment_target || '14' }}
+      IPA_NAME: RetroArchAccess
+
+    steps:
+      - name: Check out the build kit
+        # Pinned to the v4 tag's commit rather than a moving tag.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Record the toolchain
+        run: |
+          set -x
+          sw_vers
+          xcode-select -p
+          xcodebuild -version
+          cmake --version | head -1
+          git --version
+
+      - name: Install ninja
+        # cmake, git and Xcode are preinstalled on the macOS runner images; ninja is not always.
+        run: |
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+          ninja --version
+
+      # Every script is invoked through `bash`. Checked out through git or the GitHub API these
+      # files can arrive as mode 100644, and running them directly would fail on the first line.
+      - name: Fetch pinned sources and apply patches
+        run: bash ./scripts/fetch_sources.sh
+
+      - name: Confirm no private reader was staged
+        # Belt and braces: the real reader is ~2 MB and is not part of this repository.
+        run: |
+          f=work/src/melonds-ds/src/libretro/accessibility/lua/pokemon_bw_reader.lua
+          bytes=$(wc -c < "$f" | tr -d ' ')
+          echo "staged reader: ${bytes} bytes"
+          test "$bytes" -lt 16384
+          grep -q "not included in this build" "$f"
+
+      - name: Build the core for iOS
+        run: bash ./scripts/build_core_ios.sh
+
+      - name: Build RetroArch.app
+        run: bash ./scripts/build_app_ios.sh
+
+      - name: Package the ipa
+        run: bash ./scripts/make_ipa.sh
+
+      - name: Summarise the build
+        if: success()
+        run: |
+          {
+            echo "## iOS build succeeded"
+            echo
+            echo 'Both halves compiled, the DS core is in the bundle as a framework, the corrected'
+            echo 'core info is inside assets.zip, and the ad-hoc signature verifies.'
+            echo
+            echo '> **Not tested on a physical device.** Nothing in this job launches the app, so'
+            echo '> whether it starts and whether speech is audible are still unknown. Treat this'
+            echo '> as a candidate, not a release.'
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| bundle id | \`${APP_BUNDLE_ID}\` |"
+            echo "| display name | ${APP_DISPLAY_NAME} |"
+            echo "| min iOS (app and core) | ${IOS_DEPLOYMENT_TARGET} |"
+            echo "| signing | Xcode signing off, ad-hoc afterwards, verified (AltStore re-signs) |"
+            echo "| ipa | $(du -h "work/out/${IPA_NAME}.ipa" | cut -f1) |"
+            echo "| ipa sha256 | \`$(shasum -a 256 "work/out/${IPA_NAME}.ipa" | cut -d' ' -f1)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarise the failure
+        if: failure()
+        run: |
+          {
+            echo "## iOS build failed"
+            echo
+            echo 'No .ipa was produced and nothing was verified. Read the failing step above; the'
+            echo 'build logs artifact has the CMake configure log if the core was the problem.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the ipa
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: RetroArchAccess-ios-UNTESTED-ON-DEVICE
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            work/out/RetroArchAccess.ipa
+            work/out/melondsds_libretro.info
+            work/out/melondsds_libretro.dylib
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-build-logs
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            work/build-core-ios/CMakeCache.txt
+            work/build-core-ios/CMakeFiles/CMakeConfigureLog.yaml
