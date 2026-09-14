@@ -86,10 +86,10 @@ index 0ed8016..e0e789b 100644
          NAME "melondsds_vertex_shader"
 diff --git a/src/libretro/accessibility/CMakeLists.txt b/src/libretro/accessibility/CMakeLists.txt
 new file mode 100644
-index 0000000..24aae1a
+index 0000000..2b808c7
 --- /dev/null
 +++ b/src/libretro/accessibility/CMakeLists.txt
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,79 @@
 +# melonDS DS Access: Lua 5.4 runtime, the libretro-free adapter library, and the embedded reader copy.
 +#
 +# Everything in melondsds_access_core is testable without melonDS or libretro; the core glue that binds
@@ -118,6 +118,15 @@ index 0000000..24aae1a
 +set_target_properties(melondsds_lua PROPERTIES C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
 +if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang")
 +    target_compile_options(melondsds_lua PRIVATE -O2 -Wno-implicit-fallthrough)
++endif ()
++
++# iOS has no system(). Use Lua's guarded l_system override with its own iOS fallback,
++# without enabling the POSIX/popen paths that LUA_USE_IOS also selects.
++# Pass -D as a compiler option: CMake generators discard function-like definitions
++# from COMPILE_DEFINITIONS. The reader's custom os.clock remains unchanged.
++# IOS also includes Mac Catalyst, which sets MACOS and does provide system().
++if (IOS AND NOT MACOS)
++    target_compile_options(melondsds_lua PRIVATE "-Dl_system(cmd)=((cmd)==NULL?0:-1)")
 +endif ()
 +
 +add_library(melondsds_access_core STATIC
