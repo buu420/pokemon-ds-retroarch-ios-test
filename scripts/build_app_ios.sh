@@ -28,7 +28,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 require_macos
-require_cmd xcodebuild
+require_cmd xcodebuild python3
 
 PROJECT="${FRONTEND_SRC}/${XCODE_PROJECT_REL}"
 [ -d "$PROJECT" ] || die "no Xcode project at $PROJECT -- run scripts/fetch_sources.sh first."
@@ -45,16 +45,38 @@ ASSETS_ZIP="${FRONTEND_SRC}/pkg/apple/assets.zip"
        The app scheme does not build it, so the app would ship without its bundled assets and
        without a core info directory."
 
+# The app target depends on the widget extension and embeds the .appex, and Xcode then runs
+# ValidateEmbeddedBinary, which demands the embedded binary carry the parent's signing certificate.
+# With Xcode signing off and the app signed ad-hoc afterwards, the widget is unsigned and the build
+# dies (observed: "Embedded Binary Signing Certificate: Not Code Signed" vs "- (Ad Hoc Code
+# Signed)"). Dropping the .appex from the Payload later cannot help -- validation happens during
+# the build. So the dependency and the embed are removed from the EPHEMERAL FETCHED copy of the
+# project first. The widget is not wanted here anyway: it would consume a second App ID out of a
+# free account's ten per seven days.
+if [ "$KEEP_APP_EXTENSIONS" = "0" ]; then
+    log "unhooking the widget extension from the app target"
+    python3 "${KIT_DIR}/scripts/strip_widget_extension.py" "${PROJECT}/project.pbxproj" \
+        || die "could not unhook the widget extension from the project. The script refuses rather
+       than edit something it does not recognise, so the message above says what did not match."
+else
+    die "KEEP_APP_EXTENSIONS=1 is not supported by this kit.
+       The widget is embedded but cannot be signed: this build has no Apple account, Xcode signing
+       is disabled, and Xcode's ValidateEmbeddedBinary step then fails the build outright --
+       confirmed on a real macOS runner, GitHub run 34909462095. Keeping the widget needs a signing
+       identity that can cover both the app and the extension, which is out of scope here. Unset
+       KEEP_APP_EXTENSIONS to build without it."
+fi
+
 log "building RetroArch.app for iOS"
 info "scheme      ${XCODE_SCHEME}"
-info "bundle id   ${APP_BUNDLE_ID} (widget: ${APP_BUNDLE_ID}.RetroArchWidgetExtension)"
-info "min iOS     ${IOS_DEPLOYMENT_TARGET} for the app (the widget keeps its own 16.0)"
+info "bundle id   ${APP_BUNDLE_ID} (widget removed, so no second App ID is needed)"
+info "min iOS     ${IOS_DEPLOYMENT_TARGET} for the app"
 info "signing     Xcode signing off; nested frameworks ad-hoc; no team, profile or entitlements"
 
 # RA_IPHONEOS_DEPLOYMENT_TARGET, not IPHONEOS_DEPLOYMENT_TARGET: only the two app configurations
-# read it (`$(RA_IPHONEOS_DEPLOYMENT_TARGET:default=12.0)`), while the widget extension sets
-# IPHONEOS_DEPLOYMENT_TARGET = 16.0 outright. Overriding the generic setting would drag the widget
-# down to 14. This matters beyond metadata: make-frameworks.sh rewrites the core's Mach-O with
+# read it (`$(RA_IPHONEOS_DEPLOYMENT_TARGET:default=12.0)`). Overriding the generic setting would
+# also rewrite every other target in the project, which is not what is wanted. This matters
+# beyond metadata: make-frameworks.sh rewrites the core's Mach-O with
 # `vtool -set-build-version ios $IPHONEOS_DEPLOYMENT_TARGET`, so leaving the app at the 12.0
 # default would stamp the core as iOS 12 when it was compiled for ${IOS_DEPLOYMENT_TARGET}.
 set -x
@@ -91,6 +113,16 @@ FW="${APP}/Frameworks/melondsds.libretro.framework"
 [ -f "${FW}/melondsds.libretro" ] || die "${FW} has no executable inside it"
 log "core framework is in the bundle"
 info "$(ls -l "${FW}/melondsds.libretro" | awk '{print $5" bytes"}')"
+
+# Nothing should be embedded under PlugIns: the widget was unhooked from the target before the
+# build, so Xcode's ValidateEmbeddedBinary had nothing to validate. If it is here, the project edit
+# silently did not take and the next build would fail signing validation again.
+if [ "$KEEP_APP_EXTENSIONS" = "0" ] && [ -d "${APP}/PlugIns" ]; then
+    ls -1 "${APP}/PlugIns" | sed 's/^/       still embedded: /'
+    die "${APP}/PlugIns exists, but the widget was supposed to have been unhooked before the build.
+       The project edit did not take effect; the next build would fail signing validation again."
+fi
+info "no embedded app extensions"
 
 # assets.zip is extracted to <Documents>/RetroArch on first launch, and its info/ directory is
 # where RetroArch looks for core info. make_ipa.sh adds our core's .info to it.

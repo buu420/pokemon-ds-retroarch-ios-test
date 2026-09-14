@@ -32,21 +32,17 @@ cp -R "$APP" "${STAGE}/Payload/"
 PAYLOAD_APP="${STAGE}/Payload/$(basename "$APP")"
 [ -d "$PAYLOAD_APP" ] || die "the app did not copy into the Payload"
 
-if [ "$KEEP_APP_EXTENSIONS" = "0" ]; then
-    # The widget extension is a hard target dependency of the app, so it is always built and
-    # embedded; it cannot be dropped without editing the Xcode project, which this kit does not do.
-    # Removing it from the Payload is the minimal packaging-only equivalent. It matters for a free
-    # account: every embedded extension needs its own App ID, and a free account gets 10 per 7 days.
-    for dir in PlugIns Extensions; do
-        if [ -d "${PAYLOAD_APP}/${dir}" ]; then
-            log "removing embedded app extensions (${dir})"
-            ls "${PAYLOAD_APP}/${dir}" | while read -r e; do info "dropped ${e}"; done
-            safe_rm_rf "${PAYLOAD_APP}/${dir}" "$STAGE"
-        fi
-    done
-else
-    info "keeping embedded app extensions (KEEP_APP_EXTENSIONS=1)"
-fi
+# Belt and braces. The widget extension is unhooked from the app target by build_app_ios.sh before
+# xcodebuild runs -- it has to be, because Xcode's ValidateEmbeddedBinary would otherwise fail the
+# build over an unsigned .appex -- so there should be nothing here to remove. Removing it at this
+# point would be too late to help the build; this only catches a bundle that somehow still has one.
+for dir in PlugIns Extensions; do
+    if [ -d "${PAYLOAD_APP}/${dir}" ]; then
+        log "unexpected embedded extensions in ${dir}; removing them from the Payload"
+        ls -1 "${PAYLOAD_APP}/${dir}" | while read -r e; do info "dropped ${e}"; done
+        safe_rm_rf "${PAYLOAD_APP}/${dir}" "$STAGE"
+    fi
+done
 
 # --- core info, into the bundled assets archive ------------------------------------------------
 # platform_darwin.m extracts <bundle>/assets.zip to <Documents>/RetroArch on first launch, and
