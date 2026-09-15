@@ -3,6 +3,10 @@
 Two settings live in RetroArch's own config, and the rest are core options. They go to different
 places on iOS, and only one of those places is reachable through the Files app.
 
+There is one core options file per core: `melonDS DS.opt` for the DS core and `VBA-M.opt` for the
+VBA-M core. The two cores are independent — neither reads the other's options, and turning one on
+does nothing to the other.
+
 ## Core options — `melonDS DS.opt` (copy this one)
 
 Copy `melonDS DS.opt` to, on the phone:
@@ -26,6 +30,38 @@ change a core option in the menu, so it is safe to edit and safe to let RetroArc
 | `melonds_console_mode` | `ds` | the reader's address model was only ever validated against the DS 4 MiB layout. In DSi mode the core refuses to start it and says so |
 | `melonds_boot_mode` | `direct` | boot straight into the game |
 | `melonds_sysfile_mode` | `builtin` | use melonDS's built-in firmware, so no BIOS dump is needed |
+
+## Core options — `VBA-M.opt` (copy this one too)
+
+Copy `VBA-M.opt` to, on the phone:
+
+```
+On My iPhone / <the app> / RetroArch / config / VBA-M / VBA-M.opt
+```
+
+Create the `VBA-M` folder if it is not there. The name has to match the core's name exactly,
+including the hyphen and the capitals.
+
+| Key | Value | Why |
+| --- | --- | --- |
+| `vbam_access_reader` | `enabled` | runs the Pokemon reader inside the VBA-M core. It is `disabled` by default, so the core behaves exactly like stock VBA-M until this is set |
+
+That is the only option this core's adapter adds. Everything else under VBA-M is stock and can be
+left alone.
+
+The reader files themselves are **not** in this repository and are not in the build. The core looks
+for them at runtime in:
+
+```
+On My iPhone / <the app> / RetroArch / system / vbam_access
+```
+
+With the option enabled and that folder missing, the core **speaks** the reason and carries on as an
+ordinary emulator rather than failing silently — a core that starts silently is indistinguishable
+from a screen reader that has stopped.
+
+Speech goes through RetroArch's own accessibility, the same path the DS core uses — there is no
+separate speech setting for this core, so the two menu settings below cover both.
 
 ## RetroArch's own accessibility — set these in the menu
 
