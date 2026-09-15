@@ -49,11 +49,17 @@ spaces and capitals:
 | --- | --- |
 | `pokemon_bw_reader.lua` | `RetroArch/system/melondsds_access/pokemon_bw_reader.lua` |
 | `melonDS DS.opt` | `RetroArch/config/melonDS DS/melonDS DS.opt` |
+| the VBA-M reader folder | `RetroArch/system/vbam_access/` |
+| `VBA-M.opt` | `RetroArch/config/VBA-M/VBA-M.opt` |
 | your ROM | anywhere under `RetroArch`, e.g. `RetroArch/roms/` |
 
-You do **not** need to copy a `melondsds_libretro.info` anywhere. It is built into the app and
-unpacked on first launch, which is what makes the core show up as "melonDS DS" in the menu rather
-than as a filename.
+Copy only what you need: the DS rows are for Nintendo DS games, the VBA-M rows for Game Boy, Game
+Boy Color and Game Boy Advance games. The two cores do not share anything, so a missing VBA-M
+reader has no effect on the DS core and the other way round.
+
+You do **not** need to copy a `melondsds_libretro.info` or a `vbam_libretro.info` anywhere. Both are
+built into the app and unpacked on first launch, which is what makes the cores show up as
+"melonDS DS" and "VBA-M" in the menu rather than as filenames.
 
 **`system/melondsds_access/` is the important one.** It is where the core looks for the reader
 before falling back to the placeholder built into it. If the reader is missing or in the wrong
@@ -84,11 +90,15 @@ install.
 
 ## 4. Start the game
 
-> Main Menu → **Load Core** → **melonDS DS**
+> Main Menu → **Load Core** → **melonDS DS** (Nintendo DS) or **VBA-M** (Game Boy / Color / Advance)
 > Main Menu → **Load Content** → find your ROM
 
 Load the core first and the content second. The reader starts a moment after the game does and
 introduces itself; if it does not say anything at all, see below.
+
+The VBA-M reader is **off until you turn it on**: with `VBA-M.opt` copied in it is already enabled,
+and otherwise it is under Quick Menu → Options → **Pokemon Access Reader**. If its files are
+missing the core says so out loud and then runs as an ordinary emulator.
 
 ## If something is wrong
 
