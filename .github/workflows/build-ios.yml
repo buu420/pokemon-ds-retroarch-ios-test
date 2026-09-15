@@ -1,22 +1,23 @@
 name: Build sideloadable iOS ipa
 
-# Builds the accessible melonDS DS core and RetroArch for an iOS device from pinned upstream
-# sources plus the patches in this repository, and uploads an unsigned/ad-hoc .ipa for sideloading
-# with AltStore and a free Apple account.
+# Builds the accessible melonDS DS core, the accessible VBA-M core and RetroArch for an iOS device
+# from pinned upstream sources plus the patches in this repository, and uploads an unsigned/ad-hoc
+# .ipa for sideloading with AltStore and a free Apple account.
 #
 # It uses no secrets, no Apple account, no App Store Connect API key and no paid entitlements.
 # The .ipa is uploaded as a workflow artifact. That is not a release, but it is still an upload:
 # in a public repository, anyone who can read the repository can download it.
 #
-# A SUCCESSFUL run would show that both halves compile on a macOS runner, that the DS core ends up
-# in the app bundle as a framework, that the corrected core info is inside the bundled assets
+# A SUCCESSFUL run would show that all three parts compile on a macOS runner, that BOTH cores end
+# up in the app bundle as frameworks, that both core info files are inside the bundled assets
 # archive, and that the ad-hoc signature verifies. It cannot show that the app launches on a phone
 # or that speech is audible. Until someone installs the artifact, none of that is known.
 #
-# The build is not offline: the core's CMake fetches melonDS, libretro-common, embed-binaries,
+# The build is not offline: the DS core's CMake fetches melonDS, libretro-common, embed-binaries,
 # glm, zlib, libslirp, pntr, fmt, yamc, span-lite, date and the Lua 5.4.9 tarball at configure
-# time. The Lua tarball is pinned by SHA256 in the core's own CMake. Nothing downloads a prebuilt
-# RetroArch or a prebuilt core.
+# time. The Lua tarball is pinned by SHA256 in the core's own CMake. The VBA-M core downloads
+# nothing at all: its Lua is vendored in the source tree. Nothing downloads a prebuilt RetroArch or
+# a prebuilt core.
 
 on:
   workflow_dispatch:
@@ -95,7 +96,7 @@ jobs:
       - name: Fetch pinned sources and apply patches
         run: bash ./scripts/fetch_sources.sh
 
-      - name: Confirm no private reader was staged
+      - name: Confirm no private DS reader was staged
         # Belt and braces: the real reader is ~2 MB and is not part of this repository.
         run: |
           f=work/src/melonds-ds/src/libretro/accessibility/lua/pokemon_bw_reader.lua
@@ -104,8 +105,22 @@ jobs:
           test "$bytes" -lt 16384
           grep -q "not included in this build" "$f"
 
-      - name: Build the core for iOS
+      - name: Confirm no VBA-M reader was staged
+        # The VBA-M reader is supplied at runtime from <system>/vbam_access and is not part of this
+        # repository. fetch_sources.sh refuses a tree that has one; this repeats the check in the
+        # job log so it is visible without reading the script output.
+        run: |
+          if [ -e work/src/vbam-libretro/reader ]; then
+            echo "work/src/vbam-libretro/reader exists; refusing to build" >&2
+            exit 1
+          fi
+          echo "no reader files in the VBA-M tree"
+
+      - name: Build the melonDS DS core for iOS
         run: bash ./scripts/build_core_ios.sh
+
+      - name: Build the VBA-M core for iOS
+        run: bash ./scripts/build_vbam_ios.sh
 
       - name: Build RetroArch.app
         run: bash ./scripts/build_app_ios.sh
@@ -113,14 +128,40 @@ jobs:
       - name: Package the ipa
         run: bash ./scripts/make_ipa.sh
 
+      - name: Check both cores are in the packaged ipa
+        # make_ipa.sh already refuses to finish without them. This repeats the check against the
+        # shipped archive as its own step, so the job log says which cores are in the artifact
+        # rather than leaving it to be inferred from a successful packaging step.
+        run: |
+          set -eu
+          unzip -l "work/out/${IPA_NAME}.ipa" > /tmp/ipa-listing.txt
+          missing=0
+          for fw in melondsds.libretro vbam.libretro; do
+            if grep -q "Frameworks/${fw}.framework/${fw}" /tmp/ipa-listing.txt; then
+              echo "present: ${fw}.framework"
+            else
+              echo "MISSING: ${fw}.framework" >&2
+              missing=1
+            fi
+          done
+          for f in melondsds_libretro.info vbam_libretro.info; do
+            if [ -s "work/out/${f}" ]; then
+              echo "present: ${f}  ($(grep -m1 '^corename' "work/out/${f}"))"
+            else
+              echo "MISSING: ${f}" >&2
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
       - name: Summarise the build
         if: success()
         run: |
           {
             echo "## iOS build succeeded"
             echo
-            echo 'Both halves compiled, the DS core is in the bundle as a framework, the corrected'
-            echo 'core info is inside assets.zip, and the ad-hoc signature verifies.'
+            echo 'Everything compiled, BOTH cores are in the bundle as frameworks, both core info'
+            echo 'files are inside assets.zip, and the ad-hoc signature verifies.'
             echo
             echo '> **Not tested on a physical device.** Nothing in this job launches the app, so'
             echo '> whether it starts and whether speech is audible are still unknown. Treat this'
@@ -130,7 +171,11 @@ jobs:
             echo "|---|---|"
             echo "| bundle id | \`${APP_BUNDLE_ID}\` |"
             echo "| display name | ${APP_DISPLAY_NAME} |"
-            echo "| min iOS (app and core) | ${IOS_DEPLOYMENT_TARGET} |"
+            echo "| min iOS (app and both cores) | ${IOS_DEPLOYMENT_TARGET} |"
+            echo "| cores | \`melondsds.libretro.framework\`, \`vbam.libretro.framework\` |"
+            echo "| DS core sha256 | \`$(shasum -a 256 work/out/melondsds_libretro.dylib | cut -d' ' -f1)\` |"
+            echo "| VBA-M core sha256 | \`$(shasum -a 256 work/out/vbam_libretro.dylib | cut -d' ' -f1)\` |"
+            echo "| core info | \`melondsds_libretro.info\`, \`vbam_libretro.info\` (both inside assets.zip) |"
             echo "| signing | Xcode signing off, ad-hoc afterwards, verified (AltStore re-signs) |"
             echo "| ipa | $(du -h "work/out/${IPA_NAME}.ipa" | cut -f1) |"
             echo "| ipa sha256 | \`$(shasum -a 256 "work/out/${IPA_NAME}.ipa" | cut -d' ' -f1)\` |"
@@ -157,6 +202,8 @@ jobs:
             work/out/RetroArchAccess.ipa
             work/out/melondsds_libretro.info
             work/out/melondsds_libretro.dylib
+            work/out/vbam_libretro.info
+            work/out/vbam_libretro.dylib
 
       - name: Upload build logs on failure
         if: failure()
