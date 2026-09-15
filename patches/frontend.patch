@@ -24,10 +24,10 @@ index df965df..9853e69 100644
  
  #endif
 diff --git a/frontend/drivers/platform_darwin.m b/frontend/drivers/platform_darwin.m
-index 9891d45..27cae0c 100644
+index 9891d45..5050cf0 100644
 --- a/frontend/drivers/platform_darwin.m
 +++ b/frontend/drivers/platform_darwin.m
-@@ -943,6 +943,61 @@ static bool frontend_darwin_is_narrator_running(void)
+@@ -943,6 +943,71 @@ static bool frontend_darwin_is_narrator_running(void)
  #endif
  }
  
@@ -83,13 +83,23 @@ index 9891d45..27cae0c 100644
 +   /* voiceWithLanguage: may return nil for a language with no installed voice;
 +    * assigning nil selects the system default, which is the existing behaviour. */
 +   utterance.voice = [AVSpeechSynthesisVoice voiceWithLanguage:language_string];
++
++   /* Prefer the user's active assistive technology settings. With none active,
++    * the synthesizer keeps the language and rate configured above.
++    * Guard older SDKs as well as older systems; early Big Sur SDKs use 101600. */
++#if   (defined(MAC_OS_X_VERSION_MAX_ALLOWED)    && MAC_OS_X_VERSION_MAX_ALLOWED    >= 101600) \
++   || (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000) \
++   || (defined(__TV_OS_VERSION_MAX_ALLOWED)     && __TV_OS_VERSION_MAX_ALLOWED     >= 140000)
++   if (@available(macOS 11.0, iOS 14.0, tvOS 14.0, *))
++      utterance.prefersAssistiveTechnologySettings = YES;
++#endif
 +   return utterance;
 +}
 +
  static bool frontend_darwin_accessibility_speak(int speed,
        const char* speak_text, int priority)
  {
-@@ -953,11 +1008,12 @@ static bool frontend_darwin_accessibility_speak(int speed,
+@@ -953,11 +1018,12 @@ static bool frontend_darwin_accessibility_speak(int speed,
  
     if (@available(macOS 10.14, iOS 7, tvOS 9, *))
     {
@@ -107,7 +117,7 @@ index 9891d45..27cae0c 100644
        if ([synth isSpeaking])
        {
           if (priority < 10)
-@@ -966,17 +1022,134 @@ static bool frontend_darwin_accessibility_speak(int speed,
+@@ -966,17 +1032,134 @@ static bool frontend_darwin_accessibility_speak(int speed,
              [synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
        }
  
@@ -247,7 +257,7 @@ index 9891d45..27cae0c 100644
     return accessibility_speak_macos(speed, speak_text, priority);
  #else
     return false;
-@@ -1027,5 +1200,7 @@ frontend_ctx_driver_t frontend_ctx_darwin = {
+@@ -1027,5 +1210,7 @@ frontend_ctx_driver_t frontend_ctx_darwin = {
     frontend_darwin_accessibility_speak, /* accessibility_speak */
     NULL,                            /* set_gamemode        */
     "darwin",                        /* ident               */
