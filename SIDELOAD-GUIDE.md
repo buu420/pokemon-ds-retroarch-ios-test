@@ -30,7 +30,9 @@ believe AltStore.
 
 ## 1. Install the app
 
-Open the `.ipa` with AltStore and let it install. Then, the first time only:
+In AltStore, open **My Apps**, select the **Add (+)** button, then browse to the `.ipa` in Files
+and select it. Keep AltServer running on the computer while installation completes. Then, if
+iOS asks you to trust the developer:
 
 > Settings → General → VPN & Device Management → your Apple ID → **Trust**
 

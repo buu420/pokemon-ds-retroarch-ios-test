@@ -8,11 +8,10 @@ Darwin platform driver.
 
 The output is an ad-hoc-signed `.ipa` you install with **AltStore** and a **free Apple account**.
 
-> **iPhone testing is still pending.** [Build 2](https://github.com/buu420/pokemon-ds-retroarch-ios-test/actions/runs/34909462095)
-> compiled and linked both the core and RetroArch, then failed Xcode's validation of the unused
-> widget. The build scripts now remove that widget before compilation. A successful build must
-> still package the core and its info file and pass signature checks. Any resulting IPA remains
-> a test candidate until it is installed and its narration is heard on an iPhone.
+> **The Mac build passes; iPhone testing is still pending.** [Build 3](https://github.com/buu420/pokemon-ds-retroarch-ios-test/actions/runs/34911218464)
+> compiled the core and RetroArch, packaged the core and corrected info file, and passed the app
+> and core signature checks. The downloaded IPA matches the build checksum. It remains a test
+> candidate until it is installed and its narration is heard on an iPhone.
 
 ## What is in this repository
 
