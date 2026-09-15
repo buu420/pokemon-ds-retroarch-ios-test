@@ -33,9 +33,16 @@ require_cmd xcodebuild python3
 PROJECT="${FRONTEND_SRC}/${XCODE_PROJECT_REL}"
 [ -d "$PROJECT" ] || die "no Xcode project at $PROJECT -- run scripts/fetch_sources.sh first."
 
-STAGED_CORE="${FRONTEND_SRC}/pkg/apple/iOS/modules/${CORE_DYLIB_NAME}"
-[ -f "$STAGED_CORE" ] || die "no core staged at $STAGED_CORE -- run scripts/build_core_ios.sh first.
-       Building without it would produce an app with no DS core in it."
+MODULES_DIR="${FRONTEND_SRC}/pkg/apple/iOS/modules"
+# Both cores have to be staged before the app is built: make-frameworks.sh runs as a build phase and
+# only sees what is in modules/ at that moment, so a core staged afterwards simply is not in the
+# app. Naming the missing one is the difference between a two-minute fix and a confusing rebuild.
+for dylib in "${CORE_DYLIBS[@]}"; do
+    [ -f "${MODULES_DIR}/${dylib}" ] || die "no core staged at ${MODULES_DIR}/${dylib}.
+       Run scripts/build_core_ios.sh (melonDS DS) and scripts/build_vbam_ios.sh (VBA-M) first.
+       Building now would produce an app that is missing that core."
+done
+info "staged cores: ${CORE_DYLIBS[*]}"
 
 DERIVED="${WORK_DIR}/derived"
 mkdir -p "$DERIVED" "$OUT_DIR"
@@ -103,16 +110,20 @@ set +x
 APP="${DERIVED}/Build/Products/${XCODE_CONFIG}-iphoneos/RetroArch.app"
 [ -d "$APP" ] || die "the app did not build: $APP is missing"
 
-# The whole point of this build: the core has to actually be inside the bundle, as a framework,
+# The whole point of this build: each core has to actually be inside the bundle, as a framework,
 # because an iOS RetroArch build looks for cores in <bundle>/Frameworks with the extension
 # 'framework' (frontend/frontend_driver.c) and dylib_load() dlopens
-# <name>.framework/<name>. make-frameworks.sh derives that name by replacing '_' with '.'.
-FW="${APP}/Frameworks/melondsds.libretro.framework"
-[ -d "$FW" ] || die "melondsds.libretro.framework is not in the app bundle.
-       make-frameworks.sh did not pick up ${STAGED_CORE}. Without it the app has no DS core."
-[ -f "${FW}/melondsds.libretro" ] || die "${FW} has no executable inside it"
-log "core framework is in the bundle"
-info "$(ls -l "${FW}/melondsds.libretro" | awk '{print $5" bytes"}')"
+# <name>.framework/<name>. make-frameworks.sh derives that name from the staged dylib by dropping a
+# trailing '_ios' and replacing '_' with '.'.
+log "checking the core frameworks in the bundle"
+for fwname in "${CORE_FRAMEWORKS[@]}"; do
+    FW="${APP}/Frameworks/${fwname}.framework"
+    [ -d "$FW" ] || die "${fwname}.framework is not in the app bundle.
+       make-frameworks.sh did not pick up the staged dylib for it. Without it the app is missing
+       that core. Frameworks present: $(ls -1 "${APP}/Frameworks" 2>/dev/null | tr '\n' ' ')"
+    [ -f "${FW}/${fwname}" ] || die "${FW} has no executable inside it"
+    info "${fwname}.framework  $(wc -c < "${FW}/${fwname}" | tr -d ' ') bytes"
+done
 
 # Nothing should be embedded under PlugIns: the widget was unhooked from the target before the
 # build, so Xcode's ValidateEmbeddedBinary had nothing to validate. If it is here, the project edit

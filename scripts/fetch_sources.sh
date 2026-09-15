@@ -1,5 +1,10 @@
 #!/bin/bash
-# Reconstruct both source trees: pinned upstream commit + our patch + the placeholder reader.
+# Reconstruct all three source trees: pinned upstream commit + our patch, plus the placeholder
+# reader for the DS core.
+#
+#   melonds-ds     the accessible DS core
+#   vbam-libretro  the accessible VBA-M core (ordinary VBA-M identity, adapter compiled in)
+#   RetroArch      the frontend
 #
 # This runs on macOS, Linux or Git Bash; it does not need Xcode. Nothing outside $SRC_DIR is
 # written, and nothing is ever deleted: a destination that already exists is REFUSED, because
@@ -58,8 +63,35 @@ mkdir -p "$SRC_DIR"
 fetch_pinned "$CORE_UPSTREAM"     "$CORE_BASE"     "$CORE_SRC"
 apply_patch  "$CORE_SRC" "${KIT_DIR}/patches/core.patch"
 
+fetch_pinned "$VBAM_UPSTREAM"     "$VBAM_BASE"     "$VBAM_SRC"
+apply_patch  "$VBAM_SRC" "${KIT_DIR}/patches/vbam.patch"
+
 fetch_pinned "$FRONTEND_UPSTREAM" "$FRONTEND_BASE" "$FRONTEND_SRC"
 apply_patch  "$FRONTEND_SRC" "${KIT_DIR}/patches/frontend.patch"
+
+# --- what the VBA-M tree must and must not contain ----------------------------------------------
+# The VBA-M adapter loads its reader from <system>/vbam_access at RUNTIME and embeds nothing at
+# build time, so unlike the DS core there is no placeholder to stage here -- and no reader files
+# should exist in the reconstructed tree at all. If any appear, the patch is not the one that was
+# reviewed and this build must not continue.
+log "checking the VBA-M tree"
+[ ! -d "${VBAM_SRC}/reader" ] || die "${VBAM_SRC}/reader exists. The reader is third-party, has no
+       redistribution licence and is supplied at runtime from <system>/vbam_access -- it must never
+       come out of a patch in this kit."
+for required in \
+    "src/libretro/access/access_core.cpp" \
+    "src/libretro/access/access_reader.cpp" \
+    "src/libretro/access/lua/lapi.c" \
+    "${VBAM_INFO_REL}"; do
+    [ -f "${VBAM_SRC}/${required}" ] || die "${required} is missing from the reconstructed VBA-M
+       tree. The adapter would not build, or would build without its metadata."
+done
+grep -q 'VBAM_ACCESS' "${VBAM_SRC}/src/libretro/Makefile.common" \
+    || die "src/libretro/Makefile.common has no VBAM_ACCESS block, so the adapter would not be
+       compiled in and the core would be stock VBA-M with no reader."
+grep -q '^corename = "'"${VBAM_CORENAME}"'"' "${VBAM_SRC}/${VBAM_INFO_REL}" \
+    || die "${VBAM_INFO_REL} does not declare corename = \"${VBAM_CORENAME}\"."
+info "adapter sources, vendored Lua and ${VBAM_INFO_NAME} present; no reader files"
 
 # The real Pokemon reader is not in this repository and never will be. The core embeds whatever
 # lua/pokemon_bw_reader.lua holds at build time, purely as a last-resort fallback; its runtime
@@ -101,5 +133,6 @@ fi
 info "$(basename "$ASSETS_ZIP") present, $(wc -c < "$ASSETS_ZIP" | tr -d ' ') bytes"
 
 log "sources ready"
-info "core     ${CORE_SRC}"
-info "frontend ${FRONTEND_SRC}"
+info "ds core   ${CORE_SRC}"
+info "vbam core ${VBAM_SRC}"
+info "frontend  ${FRONTEND_SRC}"

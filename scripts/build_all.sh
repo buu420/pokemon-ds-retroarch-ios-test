@@ -16,6 +16,7 @@ require_macos
 
 bash "${KIT_DIR}/scripts/fetch_sources.sh"
 bash "${KIT_DIR}/scripts/build_core_ios.sh"
+bash "${KIT_DIR}/scripts/build_vbam_ios.sh"
 bash "${KIT_DIR}/scripts/build_app_ios.sh"
 bash "${KIT_DIR}/scripts/make_ipa.sh"
 
