@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Regenerate the public patches in this build kit from the two local working trees.
+"""Regenerate the public patches in this build kit from the three local working trees.
 
-This is the repeatable export command. Run it again whenever either working tree changes, so the
+This is the repeatable export command. Run it again whenever any working tree changes, so the
 published patches always describe the current source:
 
     python tools/export_public_source.py ^
         --core     C:\\RetroArch-Win64\\dev\\melonds-ds-access ^
+        --vbam     C:\\RetroArch-Win64\\dev\\vbam-pokemon-access ^
         --frontend C:\\RetroArch-Win64\\dev\\RetroArch-pokemon-native ^
         --kit      . ^
         --check-apply
@@ -43,8 +44,16 @@ import verify_public_kit as vpk  # noqa: E402
 
 CORE_BASE = "bc4e4b67d2d470d7c682810a1e892cafd6f9082b"
 CORE_UPSTREAM = "https://github.com/JesseTG/melonds-ds.git"
+VBAM_BASE = "115defb3a318258ab84746d45258a1aec19d0b4b"
+VBAM_UPSTREAM = "https://github.com/libretro/vbam-libretro.git"
 FRONTEND_BASE = "69a4f0ea1e8aaf442ae4858f2e7f2b31a1776576"
 FRONTEND_UPSTREAM = "https://github.com/libretro/RetroArch.git"
+
+# VBA-M keeps its ordinary libretro identity, so its core info is upstream's own file and this kit
+# must not change it. The hash is of the blob AS GIT STORES IT (LF), which is what a macOS or Linux
+# checkout produces; a Windows working copy with core.autocrlf=true hashes differently, so it is
+# read out of git rather than off disk.
+VBAM_INFO_REL = "src/libretro/vbam_libretro.info"
 
 STUB_REL = "stub/pokemon_bw_reader.lua"
 STUB_TARGET = "src/libretro/accessibility/lua/pokemon_bw_reader.lua"
@@ -86,6 +95,39 @@ SANITIZERS = [
                   "way; set -DMELONDSDS_ACCESS_PRISM_DLL=<path> to run it locally.",
     },
 ]
+
+VBAM_RULES = {
+    "exclude": [
+        ("reader/",
+         "the third-party Pokemon reader: ~2.7 MB of Lua across ~200 files, written for the "
+         "standalone VBA-ReRecording emulator and with no redistribution licence. The VBA-M "
+         "adapter loads it at RUNTIME from <system>/vbam_access and embeds nothing, so unlike the "
+         "DS core there is not even a placeholder to ship."),
+        ("ACCESS-PLAN.md",
+         "internal implementation notes: absolute local paths, the layout of the private research "
+         "checkouts, and line-by-line quotations of the third-party reader. Not needed to build."),
+    ],
+    # Reader files do turn up outside reader/ -- dropped at the tree root while testing, for
+    # instance. A prefix rule cannot catch that, and leaving it to the "unclassified" error means
+    # the export stops dead every time someone tries a script. This states the real invariant: the
+    # VBA-M core vendors Lua as C sources and contains no .lua of its own, so every .lua file in
+    # this tree is reader material, wherever it sits.
+    #
+    # Deliberately NOT applied to the DS tree: its reader directory is already excluded by prefix,
+    # and a stray .lua anywhere else there stays a hard error, which is the stricter outcome.
+    "exclude_suffixes": [
+        (".lua",
+         "a Lua script in the VBA-M tree is reader material. This core's own Lua is vendored as C "
+         "sources under src/libretro/access/lua/; it has no .lua files of its own, so nothing with "
+         "that extension is ever part of the build and none of it may ship."),
+    ],
+    # src/gb and src/gba are the emulator hooks the adapter needs; src/libretro covers the libretro
+    # port, the adapter itself and the vendored Lua (which is official Lua, MIT, and may ship);
+    # tests/ is this project's own host-side test code and carries no fixtures.
+    "export_prefixes": [
+        "src/gb/", "src/gba/", "src/libretro/", "tests/",
+    ],
+}
 
 FRONTEND_RULES = {
     "exclude": [
@@ -149,6 +191,26 @@ def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def classify_path(path, rules):
+    """Decide one path: ("export", None), ("exclude", reason) or ("unclassified", reason).
+
+    Separate from classify() so it can be tested without a git repository -- see
+    tools/test_export_rules.py. Exclude rules are checked before export prefixes, so a reader file
+    that lands inside an exported directory is still excluded.
+    """
+    reason = next((r for pre, r in rules["exclude"]
+                   if path == pre or path.startswith(pre)), None)
+    if reason is None:
+        lower = path.lower()
+        reason = next((r for suffix, r in rules.get("exclude_suffixes", [])
+                       if lower.endswith(suffix)), None)
+    if reason:
+        return "exclude", reason
+    if any(path == p or path.startswith(p) for p in rules["export_prefixes"]):
+        return "export", None
+    return "unclassified", "no rule covers this path"
+
+
 def classify(repo, rules):
     """Return (export_paths, excluded, unclassified) for one working tree."""
     modified, unclassified, excluded, export = [], [], [], []
@@ -170,14 +232,13 @@ def classify(repo, rules):
             untracked.append(path.replace("\\", "/"))
 
     for path in sorted(set(modified) | set(untracked)):
-        reason = next((r for pre, r in rules["exclude"]
-                       if path == pre or path.startswith(pre)), None)
-        if reason:
+        verdict, reason = classify_path(path, rules)
+        if verdict == "exclude":
             excluded.append((path, reason))
-        elif any(path == p or path.startswith(p) for p in rules["export_prefixes"]):
+        elif verdict == "export":
             export.append(path)
         else:
-            unclassified.append((path, "no rule covers this path"))
+            unclassified.append((path, reason))
 
     return export, excluded, unclassified
 
@@ -305,6 +366,7 @@ def apply_check(repo, base, patch_text, label, asserts, stub_src=None, stub_targ
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Regenerate the public patches in the iOS build kit.")
     ap.add_argument("--core", required=True, help="path to the melonDS DS working tree")
+    ap.add_argument("--vbam", required=True, help="path to the VBA-M working tree")
     ap.add_argument("--frontend", required=True, help="path to the RetroArch working tree")
     ap.add_argument("--kit", required=True, help="path to this build kit")
     ap.add_argument("--check-apply", action="store_true",
@@ -314,6 +376,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     core = os.path.abspath(args.core)
+    vbam = os.path.abspath(args.vbam)
     frontend = os.path.abspath(args.frontend)
     kit = os.path.abspath(args.kit)
     patches_dir = os.path.join(kit, "patches")
@@ -328,6 +391,7 @@ def main(argv=None):
 
     trees = [
         ("core", core, CORE_BASE, CORE_UPSTREAM, CORE_RULES, "core.patch"),
+        ("vbam", vbam, VBAM_BASE, VBAM_UPSTREAM, VBAM_RULES, "vbam.patch"),
         ("frontend", frontend, FRONTEND_BASE, FRONTEND_UPSTREAM, FRONTEND_RULES, "frontend.patch"),
     ]
 
@@ -342,8 +406,25 @@ def main(argv=None):
         print("   base %s" % base)
         for path in export:
             print("   EXPORT   %s" % path)
+        # One line per excluded path made sense when a rule covered two or three files. The VBA-M
+        # reader is ~200, and a 200-line wall is a report nobody reads, so paths are grouped by the
+        # reason that excluded them. The count is the thing to check: if it moves, something moved.
+        groups = {}
+        order = []
         for path, reason in excluded:
-            print("   EXCLUDE  %s\n              %s" % (path, reason))
+            if reason not in groups:
+                groups[reason] = []
+                order.append(reason)
+            groups[reason].append(path)
+        for reason in order:
+            paths = groups[reason]
+            if len(paths) <= 4:
+                for path in paths:
+                    print("   EXCLUDE  %s" % path)
+            else:
+                print("   EXCLUDE  %d paths, e.g. %s, ..."
+                      % (len(paths), ", ".join(paths[:3])))
+            print("              %s" % reason)
         for path, reason in unclassified:
             print("   UNCLASSIFIED  %s  (%s)" % (path, reason))
         if unclassified:
@@ -375,8 +456,22 @@ def main(argv=None):
         report.append((label, repo, base, url, name, len(patch), classified[label]))
         print("\nwrote %s (%d bytes)" % (path, len(patch)))
 
+    # Read out of git, not off disk: on Windows the working copy is CRLF and would hash differently
+    # from what a macOS runner checks out. scripts/build_vbam_ios.sh compares against this value.
+    vbam_info_blob = git(vbam, "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                         "show", "%s:%s" % (VBAM_BASE, VBAM_INFO_REL), binary=True)
+    if not vbam_info_blob.strip():
+        raise SystemExit("error: %s is empty or missing at %s" % (VBAM_INFO_REL, VBAM_BASE[:12]))
+
     pins = {
         "core": {"upstream": CORE_UPSTREAM, "base": CORE_BASE, "patch": "patches/core.patch"},
+        "vbam": {"upstream": VBAM_UPSTREAM, "base": VBAM_BASE, "patch": "patches/vbam.patch",
+                 "core_info": {
+                     "path": VBAM_INFO_REL,
+                     "sha256": sha256_bytes(vbam_info_blob),
+                     "note": "sha256 of the blob as git stores it (LF). A checkout on macOS or "
+                             "Linux matches; a Windows checkout with core.autocrlf=true will not.",
+                 }},
         "frontend": {"upstream": FRONTEND_UPSTREAM, "base": FRONTEND_BASE,
                      "patch": "patches/frontend.patch"},
         "placeholder_reader": {"path": STUB_REL, "staged_to": STUB_TARGET,
@@ -409,6 +504,30 @@ def main(argv=None):
                  'set(MELONDSDS_ACCESS_PRISM_DLL "" CACHE FILEPATH'),
             ],
             stub_src=stub, stub_target=STUB_TARGET)
+
+        vbam_patch = open(os.path.join(patches_dir, "vbam.patch"), encoding="utf-8").read()
+        checks += apply_check(
+            vbam, VBAM_BASE, vbam_patch, "vbam",
+            asserts=[
+                ("exists", "src/libretro/access/access_core.cpp", None),
+                ("exists", "src/libretro/access/access_reader.cpp", None),
+                ("exists", "src/libretro/access/access_speech.cpp", None),
+                # Vendored Lua has to arrive whole: the core compiles it straight in, so a missing
+                # file is a link error on a macOS runner rather than anything visible here.
+                ("exists", "src/libretro/access/lua/lapi.c", None),
+                ("exists", "src/libretro/access/lua/loslib.c", None),
+                ("exists", "src/libretro/access/lua/lua.h", None),
+                ("exists", "tests/access_tests.cpp", None),
+                # The reader and the internal notes must not be reachable through the patch.
+                ("absent", "reader", None),
+                ("absent", "ACCESS-PLAN.md", None),
+                # The adapter has to be wired into the build, or the core is stock VBA-M.
+                ("contains", "src/libretro/Makefile.common", "VBAM_ACCESS"),
+                ("contains", "src/libretro/Makefile.common", "access/lua/lapi.c"),
+                ("contains", "src/libretro/libretro_core_options.h", "vbam_access_reader"),
+                # Ordinary VBA-M identity: the metadata that ships is upstream's, untouched.
+                ("unmodified", VBAM_INFO_REL, None),
+            ])
 
         fe_patch = open(os.path.join(patches_dir, "frontend.patch"), encoding="utf-8").read()
         checks += apply_check(

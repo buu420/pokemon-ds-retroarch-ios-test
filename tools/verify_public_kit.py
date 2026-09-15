@@ -65,7 +65,11 @@ DENY_LITERALS = (
     PRIVATE_ORIGINAL_SHA256,
 )
 
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Bounded on purpose. With unbounded '+' on the local part, a long run of word characters -- a
+# minified blob, a base64 line, a vendored table -- makes this backtrack quadratically: a 2 MiB run
+# of one repeated letter took longer than a build. The limits are the real ones (RFC 5321 caps the
+# local part at 64 octets and a domain at 255), so nothing an actual address can look like is lost.
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}")
 
 # Patch files may only touch these paths. This is the structural guarantee: even if a content scan
 # missed something, a patch that reaches into the reader directory is rejected outright.
@@ -74,6 +78,12 @@ PATCH_RULES = {
         "allow": ("CMakeLists.txt", "melondsds_libretro.info.in", "cmake/",
                   "src/libretro/", "test/accessibility/"),
         "deny": ("src/libretro/accessibility/lua/", "docs/"),
+    },
+    "patches/vbam.patch": {
+        # src/libretro/access/lua/ IS allowed here, unlike the DS core's: that directory is
+        # official Lua 5.4.9 (MIT), vendored and compiled into the core, not a reader.
+        "allow": ("src/gb/", "src/gba/", "src/libretro/", "tests/"),
+        "deny": ("reader/", "ACCESS-PLAN.md"),
     },
     "patches/frontend.patch": {
         "allow": ("accessibility.h", "frontend/frontend_driver.h", "frontend/drivers/",
@@ -127,7 +137,8 @@ def load_extra_literals(path):
         return list(json.load(fh).get("literals", []))
 
 
-def check(kit, max_file_bytes, max_total_bytes, allowed_emails, extra_literals):
+def check(kit, max_file_bytes, max_patch_bytes, max_total_bytes, allowed_emails,
+          extra_literals):
     problems, notes, seen, total = [], [], [], 0
     literals = tuple(DENY_LITERALS) + tuple(extra_literals)
 
@@ -154,10 +165,20 @@ def check(kit, max_file_bytes, max_total_bytes, allowed_emails, extra_literals):
                 break
         if base == "pokemon_bw_reader.lua" and rel != ALLOWED_READER_PATH:
             problems.append("%s: a reader script may only exist at %s" % (rel, ALLOWED_READER_PATH))
-        if size > max_file_bytes:
-            problems.append("%s: %d bytes exceeds the %d byte per-file limit; the private reader "
-                            "is ~2 MB, so oversized files are refused on principle"
-                            % (rel, size, max_file_bytes))
+        # Both readers are Lua. The kit ships exactly one Lua file -- the placeholder -- so any
+        # other one is either a reader under a new name or something that needs classifying.
+        if lower.endswith(".lua") and rel != ALLOWED_READER_PATH:
+            problems.append("%s: the only Lua file this kit may contain is %s"
+                            % (rel, ALLOWED_READER_PATH))
+        # A patch is a bundle of source files and is legitimately large: the VBA-M one carries
+        # vendored Lua 5.4.9 and is over a megabyte on its own. Everything else in the kit is a
+        # script, a document or a config, and none of those has any business being big.
+        limit = max_patch_bytes if lower.startswith("patches/") and lower.endswith(".patch") \
+            else max_file_bytes
+        if size > limit:
+            problems.append("%s: %d bytes exceeds the %d byte limit for this kind of file; the "
+                            "private reader is ~2 MB, so oversized files are refused on principle"
+                            % (rel, size, limit))
 
         digest = sha256_file(full)
         if digest == PRIVATE_READER_SHA256:
@@ -194,6 +215,14 @@ def check(kit, max_file_bytes, max_total_bytes, allowed_emails, extra_literals):
             problems.append("%s: no 'diff --git' headers found; refusing to trust a patch this "
                             "scanner cannot parse" % patch_rel)
         for path in touched:
+            # Neither reader is shipped in any form: the DS placeholder is staged from stub/ at
+            # fetch time and the VBA-M reader is supplied at runtime, so no patch in this kit has
+            # any business carrying a .lua file. This is the rule that does not depend on knowing
+            # what the reader looks like.
+            if path.lower().endswith(".lua"):
+                problems.append("%s: adds a Lua file (%s). No patch here may carry one: the DS "
+                                "placeholder is staged from %s and the VBA-M reader is supplied "
+                                "at runtime." % (patch_rel, path, ALLOWED_READER_PATH))
             if any(path == d or path.startswith(d) for d in rules["deny"]):
                 problems.append("%s: touches denied path %s" % (patch_rel, path))
             elif not any(path == a or path.startswith(a) for a in rules["allow"]):
@@ -219,6 +248,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Fail-closed privacy check for the iOS build kit.")
     ap.add_argument("--kit", required=True, help="the build kit directory to check")
     ap.add_argument("--max-file-bytes", type=int, default=1 << 20)
+    ap.add_argument("--max-patch-bytes", type=int, default=4 << 20,
+                    help="per-file limit for patches/*.patch, which carry vendored source")
     ap.add_argument("--max-total-bytes", type=int, default=8 << 20)
     ap.add_argument("--allow-email", action="append", default=[],
                     help="permit a specific e-mail address; repeatable")
@@ -233,7 +264,7 @@ def main(argv=None):
         return 2
 
     problems, notes, seen, total = check(
-        kit, args.max_file_bytes, args.max_total_bytes,
+        kit, args.max_file_bytes, args.max_patch_bytes, args.max_total_bytes,
         {e.lower() for e in args.allow_email}, load_extra_literals(args.extra_denylist))
 
     print("kit:   %s" % kit)
