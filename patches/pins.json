@@ -4,6 +4,16 @@
     "base": "bc4e4b67d2d470d7c682810a1e892cafd6f9082b",
     "patch": "patches/core.patch"
   },
+  "vbam": {
+    "upstream": "https://github.com/libretro/vbam-libretro.git",
+    "base": "115defb3a318258ab84746d45258a1aec19d0b4b",
+    "patch": "patches/vbam.patch",
+    "core_info": {
+      "path": "src/libretro/vbam_libretro.info",
+      "sha256": "070f5a03cf06302d2353b692cfc9e1ca70ac37975af185a32c2b1da8e675f5b7",
+      "note": "sha256 of the blob as git stores it (LF). A checkout on macOS or Linux matches; a Windows checkout with core.autocrlf=true will not."
+    }
+  },
   "frontend": {
     "upstream": "https://github.com/libretro/RetroArch.git",
     "base": "69a4f0ea1e8aaf442ae4858f2e7f2b31a1776576",
