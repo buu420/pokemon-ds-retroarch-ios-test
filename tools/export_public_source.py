@@ -540,7 +540,7 @@ def main(argv=None):
                 ("exists", "frontend/drivers/platform_darwin.m", None),
                 ("unmodified", "frontend/drivers/platform_win32.c", None),
                 ("unmodified", "Makefile.win", None),
-                ("unmodified", "Makefile.common", None),
+                ("contains", "Makefile.common", "ui/drivers/cocoa/cocoa_accessibility.o"),
                 ("contains", "pkg/apple/BaseConfig.xcconfig", "HAVE_ACCESSIBILITY"),
             ])
 
