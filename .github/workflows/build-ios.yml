@@ -43,7 +43,7 @@ on:
         type: string
         default: "14"
   push:
-    branches: [main]
+    branches: [main, voiceover-menu-test]
     paths:
       - 'patches/**'
       - 'scripts/**'
@@ -95,6 +95,12 @@ jobs:
       # files can arrive as mode 100644, and running them directly would fail on the first line.
       - name: Fetch pinned sources and apply patches
         run: bash ./scripts/fetch_sources.sh
+
+      - name: Test VoiceOver menu action routing
+        run: |
+          cc -std=c99 -Wall -Wextra -Werror -Iwork/src/RetroArch/libretro-common/include \
+            work/src/RetroArch/tests/menu_accessibility/test_actions.c -o /tmp/menu-accessibility-test
+          /tmp/menu-accessibility-test
 
       - name: Confirm no private DS reader was staged
         # Belt and braces: the real reader is ~2 MB and is not part of this repository.
