@@ -132,14 +132,18 @@ VBAM_RULES = {
 FRONTEND_RULES = {
     "exclude": [
         ("Makefile.win", "Windows-only build change, unrelated to iOS."),
-        ("Makefile.common", "adds HAVE_NVDA, a Windows-only define; the Apple build uses the "
-                            "Xcode project, not Makefile.common."),
+        ("docs/", "local implementation plans, not required to build"),
         ("frontend/drivers/platform_win32.c", "the Windows implementation of the same hooks; "
                                               "unrelated to iOS."),
     ],
     "export_prefixes": [
         "accessibility.h", "frontend/frontend_driver.h", "frontend/drivers/",
         "libretro-common/include/libretro.h", "retroarch.c", "runloop.c", "pkg/apple/",
+        "Makefile.common", "griffin/griffin_objc.m", "menu/menu_accessibility.h",
+        "menu/menu_driver.c", "menu/menu_cbs.h", "menu/cbs/menu_cbs_ok.c",
+        "menu/drivers/ozone.c", "ui/drivers/cocoa/cocoa_accessibility.h",
+        "ui/drivers/cocoa/cocoa_accessibility.m", "ui/drivers/cocoa/cocoa_common.m",
+        "ui/drivers/ui_cocoatouch.m", "tests/menu_accessibility/",
     ],
 }
 

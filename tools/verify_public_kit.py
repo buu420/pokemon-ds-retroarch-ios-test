@@ -87,8 +87,13 @@ PATCH_RULES = {
     },
     "patches/frontend.patch": {
         "allow": ("accessibility.h", "frontend/frontend_driver.h", "frontend/drivers/",
-                  "libretro-common/include/libretro.h", "retroarch.c", "runloop.c", "pkg/apple/"),
-        "deny": ("Makefile.win", "Makefile.common", "frontend/drivers/platform_win32.c"),
+                  "libretro-common/include/libretro.h", "retroarch.c", "runloop.c", "pkg/apple/",
+                  "Makefile.common", "griffin/griffin_objc.m", "menu/menu_accessibility.h",
+                  "menu/menu_driver.c", "menu/menu_cbs.h", "menu/cbs/menu_cbs_ok.c",
+                  "menu/drivers/ozone.c", "ui/drivers/cocoa/cocoa_accessibility.h",
+                  "ui/drivers/cocoa/cocoa_accessibility.m", "ui/drivers/cocoa/cocoa_common.m",
+                  "ui/drivers/ui_cocoatouch.m", "tests/menu_accessibility/"),
+        "deny": ("Makefile.win", "frontend/drivers/platform_win32.c"),
     },
 }
 
