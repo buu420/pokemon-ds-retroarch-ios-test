@@ -1,5 +1,19 @@
+diff --git a/Makefile.common b/Makefile.common
+index 57dabf5eac07efae17758161b3f5605eb8d46ca6..0b76da859105c160a504ed655b11963b8b60e20c 100644
+--- a/Makefile.common
++++ b/Makefile.common
+@@ -2584,7 +2584,8 @@ ifeq ($(HAVE_COCOA_COMMON),1)
+    DEFINES += -DHAVE_MAIN -DOSX
+    OBJ += input/drivers/cocoa_input.o \
+           ui/drivers/ui_cocoa.o \
+-          ui/drivers/cocoa/cocoa_common.o
++          ui/drivers/cocoa/cocoa_common.o \
++          ui/drivers/cocoa/cocoa_accessibility.o
+ 
+    ifeq ($(HAVE_OPENGL), 1)
+            DEFINES += -DGL_SILENCE_DEPRECATION
 diff --git a/accessibility.h b/accessibility.h
-index df965df..9853e69 100644
+index df965df2bf50c8104c708fd016e4d37547d02baa..9853e6905bc77c93114b42c9647268b5a48be6c1 100644
 --- a/accessibility.h
 +++ b/accessibility.h
 @@ -87,6 +87,20 @@ bool accessibility_speak_priority(
@@ -24,7 +38,7 @@ index df965df..9853e69 100644
  
  #endif
 diff --git a/frontend/drivers/platform_darwin.m b/frontend/drivers/platform_darwin.m
-index 9891d45..5050cf0 100644
+index 9891d455553aac436d82750ce024e745c8f6c368..5050cf0d6de5b107d99b97b34b61230274d28541 100644
 --- a/frontend/drivers/platform_darwin.m
 +++ b/frontend/drivers/platform_darwin.m
 @@ -943,6 +943,71 @@ static bool frontend_darwin_is_narrator_running(void)
@@ -267,7 +281,7 @@ index 9891d45..5050cf0 100644
 +   accessibility_speak_ex_darwin    /* accessibility_speak_ex    */
  };
 diff --git a/frontend/frontend_driver.h b/frontend/frontend_driver.h
-index b1d9214..0815db5 100644
+index b1d92140007c76739f296a1d6c91398eaa153604..0815db5b236568438fc0587ca60562e0d985d74e 100644
 --- a/frontend/frontend_driver.h
 +++ b/frontend/frontend_driver.h
 @@ -118,6 +118,21 @@ typedef struct frontend_ctx_driver
@@ -292,8 +306,20 @@ index b1d9214..0815db5 100644
  } frontend_ctx_driver_t;
  
  typedef struct
+diff --git a/griffin/griffin_objc.m b/griffin/griffin_objc.m
+index 78d21ce99f4686475b3c7c21a75311df5675460f..ab3bf0322283365a61dbc0247d76e36eed81d736 100644
+--- a/griffin/griffin_objc.m
++++ b/griffin/griffin_objc.m
+@@ -32,6 +32,7 @@
+ #if defined(HAVE_COCOATOUCH) || defined(HAVE_COCOA) || defined(HAVE_COCOA_METAL)
+ 
+ #include "../ui/drivers/cocoa/cocoa_common.m"
++#include "../ui/drivers/cocoa/cocoa_accessibility.m"
+ #include "../ui/drivers/cocoa/RetroArchPlaylistManager.m"
+ #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
+ #include "../gfx/drivers_context/cocoa_gl_ctx.m"
 diff --git a/libretro-common/include/libretro.h b/libretro-common/include/libretro.h
-index 32b732e..d3cdd10 100644
+index 32b732e6d2c4d4bef6b8116a1732e5ee1477adb2..d3cdd10058bac38840b8cc35aa3e1a89a5c4dd7d 100644
 --- a/libretro-common/include/libretro.h
 +++ b/libretro-common/include/libretro.h
 @@ -2072,6 +2072,42 @@ enum retro_mod
@@ -438,8 +464,419 @@ index 32b732e..d3cdd10 100644
  /** @} */
  
  /* Describes how the libretro implementation maps a libretro input bind
+diff --git a/menu/cbs/menu_cbs_ok.c b/menu/cbs/menu_cbs_ok.c
+index 5283b0510c63c19559377fdc0de2bc6bc291dac9..7c06645ffba1be2df9ddfc56be35c625173aac55 100644
+--- a/menu/cbs/menu_cbs_ok.c
++++ b/menu/cbs/menu_cbs_ok.c
+@@ -7823,6 +7823,78 @@ static int action_ok_push_default(const char *path,
+          ACTION_OK_DL_PUSH_DEFAULT);
+ }
+ 
++bool menu_cbs_ok_is_navigation(const menu_file_list_cbs_t *cbs)
++{
++   unsigned i;
++   static int (*const navigation[])(const char*, const char*, unsigned, size_t, size_t) = {
++      action_ok_push_default,
++      action_ok_directory_push, action_ok_parent_directory_push,
++      action_ok_configurations_list, action_ok_core_list,
++      action_ok_sideload_core_list, action_ok_push_content_list,
++      action_ok_content_collection_list, action_ok_push_generic_list,
++      action_ok_saving_list, action_ok_cloud_sync_list,
++      action_ok_logging_list, action_ok_frame_throttle_list,
++      action_ok_frame_time_counter_list, action_ok_rewind_list,
++      action_ok_onscreen_display_list, action_ok_onscreen_notifications_list,
++      action_ok_onscreen_notifications_views_list, action_ok_onscreen_overlay_list,
++      action_ok_overlay_lightgun_settings_list, action_ok_overlay_mouse_settings_list,
++      action_ok_osk_overlay_list, action_ok_menu_list,
++      action_ok_quick_menu_override_options, action_ok_menu_views_list,
++      action_ok_settings_views_list, action_ok_quick_menu_views_list,
++      action_ok_menu_sounds_list, action_ok_user_interface_list,
++      action_ok_menu_file_browser_list, action_ok_retro_achievements_list,
++      action_ok_cheevos_appearance_list, action_ok_cheevos_visibility_list,
++      action_ok_updater_list, action_ok_user_list, action_ok_directory_list,
++      action_ok_privacy_list, action_ok_midi_list, action_ok_network_list,
++      action_ok_network_hosting_list, action_ok_netplay_lobby_filters_list,
++      action_ok_subsystem_list, action_ok_subsystem_add_list,
++      action_ok_database_manager_list, action_ok_disk_image_append_list,
++      action_ok_record_configfile, action_ok_stream_configfile,
++      action_ok_remap_file, action_ok_override_file,
++      action_ok_audio_dsp_plugin, action_ok_video_filter,
++      action_ok_overlay_preset, action_ok_osk_overlay_preset, action_ok_video_font,
++      action_ok_push_accounts_list, action_ok_push_driver_settings_list,
++      action_ok_push_video_settings_list, action_ok_push_video_fullscreen_mode_settings_list,
++      action_ok_push_video_synchronization_settings_list, action_ok_push_video_windowed_mode_settings_list,
++      action_ok_push_video_scaling_settings_list, action_ok_push_video_hdr_settings_list,
++      action_ok_push_video_output_settings_list, action_ok_push_configuration_settings_list,
++      action_ok_push_core_settings_list, action_ok_push_audio_settings_list,
++      action_ok_push_audio_output_settings_list, action_ok_push_audio_synchronization_settings_list,
++      action_ok_push_ai_service_settings_list, action_ok_push_accessibility_settings_list,
++      action_ok_push_input_settings_list, action_ok_push_input_menu_settings_list,
++      action_ok_push_input_turbo_fire_settings_list, action_ok_push_input_haptic_feedback_settings_list,
++      action_ok_push_latency_settings_list, action_ok_push_recording_settings_list,
++      action_ok_push_playlist_settings_list, action_ok_push_playlist_manager_list,
++      action_ok_push_input_retropad_binds_list, action_ok_push_input_hotkey_binds_list,
++      action_ok_push_user_binds_list, action_ok_push_accounts_cheevos_list,
++      action_ok_push_accounts_youtube_list, action_ok_push_accounts_twitch_list,
++      action_ok_push_accounts_facebook_list, action_ok_push_manual_content_scan_list,
++      action_ok_push_core_manager_list, action_ok_push_core_option_override_list,
++      action_ok_push_remap_file_manager_list, action_ok_push_savestate_list,
++      action_ok_push_core_options_list, action_ok_push_core_information_list,
++      action_ok_push_playlist_manager_settings,
++#ifdef HAVE_MICROPHONE
++      action_ok_push_microphone_settings_list,
++#endif
++#ifdef HAVE_AUDIOMIXER
++      action_ok_push_audio_mixer_settings_list,
++#endif
++#if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
++      action_ok_shader_preset_manager, action_ok_shader_parameters,
++      action_ok_shader_preset, action_ok_shader_preset_prepend, action_ok_shader_preset_append,
++#endif
++   };
++   if (!cbs || !cbs->action_ok)
++      return false;
++   for (i = 0; i < ARRAY_SIZE(navigation); ++i)
++      if (cbs->action_ok == navigation[i])
++         return true;
++   /* Unknown and mixed-purpose callbacks require explicit activation. In
++    * particular, core-option dropdowns can toggle a Boolean and subsystem load
++    * callbacks can launch content despite also using display-list helpers. */
++   return false;
++}
++
+ static int action_ok_start_core(const char *path,
+       const char *label, unsigned type, size_t idx, size_t entry_idx)
+ {
+diff --git a/menu/drivers/ozone.c b/menu/drivers/ozone.c
+index 2c26c12b6cc6c106a7ad1974a2d39362c3d3a1e9..b2aec3de34dce474ea63059bac91320c6d569bbf 100644
+--- a/menu/drivers/ozone.c
++++ b/menu/drivers/ozone.c
+@@ -36,6 +36,7 @@
+ 
+ #include "../menu_cbs.h"
+ #include "../menu_driver.h"
++#include "../menu_accessibility.h"
+ #include "../menu_screensaver.h"
+ 
+ #include "../../gfx/gfx_animation.h"
+@@ -9059,6 +9060,111 @@ static int ozone_menu_entry_action(
+          new_action);
+ }
+ 
++/* Native assistive input reads the same visible entries and enters the normal
++ * menu frame, including its help dialogs, refresh and speech handling. */
++bool ozone_accessibility_get_state(menu_accessibility_state_t *state)
++{
++   menu_entry_t entry;
++   file_list_t *list;
++   file_list_t *stack;
++   ozone_handle_t *ozone;
++   struct menu_state *menu_st = menu_state_get_ptr();
++   if (!state)
++      return false;
++   memset(state, 0, sizeof(*state));
++   if (!(menu_st->flags & MENU_ST_FLAG_ALIVE)
++         || (menu_st->flags & (MENU_ST_FLAG_IS_BINDING
++            | MENU_ST_FLAG_BLOCK_ALL_INPUT | MENU_ST_FLAG_INP_DLG_KB_DISPLAY))
++         || !menu_st->driver_ctx || !menu_st->driver_data || !menu_st->userdata
++         || !string_is_equal(menu_st->driver_ctx->ident, "ozone")
++         || !menu_st->entries.list)
++      return false;
++
++   ozone = (ozone_handle_t*)menu_st->userdata;
++   list  = MENU_LIST_GET_SELECTION(menu_st->entries.list, 0);
++   stack = MENU_LIST_GET(menu_st->entries.list, 0);
++   if (!stack || !stack->size)
++      return false;
++   state->depth = stack->size;
++   state->category = (ozone->flags & OZONE_FLAG_CURSOR_IN_SIDEBAR) != 0;
++   menu_entries_get_title(state->title, sizeof(state->title));
++   if (menu_accessibility_dialog_active())
++   {
++      state->message = true;
++      strlcpy(state->label, menu_st->driver_data->menu_state_msg, sizeof(state->label));
++      return true;
++   }
++   if (state->category)
++   {
++      state->position = ozone->categories_selection_ptr;
++      state->count = ozone->system_tab_end
++            + (ozone->show_playlist_tabs ? ozone->horizontal_list.size : 0) + 1;
++      state->can_enter = true;
++      strlcpy(state->label, state->title, sizeof(state->label));
++      return true;
++   }
++   state->count = list ? list->size : 0;
++   state->position = menu_st->selection_ptr;
++   if (!list || !list->size || state->position >= list->size)
++   {
++      state->count = 0;
++      return true;
++   }
++
++   MENU_ENTRY_INITIALIZE(entry);
++   entry.flags = MENU_ENTRY_FLAG_PATH_ENABLED | MENU_ENTRY_FLAG_LABEL_ENABLED
++         | MENU_ENTRY_FLAG_RICH_LABEL_ENABLED | MENU_ENTRY_FLAG_VALUE_ENABLED
++         | MENU_ENTRY_FLAG_SUBLABEL_ENABLED;
++   menu_entry_get(&entry, 0, state->position, NULL, true);
++   strlcpy(state->label, !string_is_empty(entry.rich_label)
++         ? entry.rich_label : entry.path, sizeof(state->label));
++   strlcpy(state->help, entry.sublabel, sizeof(state->help));
++
++   state->can_enter = menu_cbs_ok_is_navigation(
++         (const menu_file_list_cbs_t*)list->list[state->position].actiondata)
++         || entry.setting_type == ST_PATH || entry.setting_type == ST_DIR;
++   if (!string_is_equal(entry.value, msg_hash_to_str(MENU_ENUM_LABEL_VALUE_MORE)))
++      strlcpy(state->value, !string_is_empty(entry.password_value)
++            ? entry.password_value : entry.value, sizeof(state->value));
++   switch (entry.setting_type)
++   {
++      case ST_BOOL:
++      case ST_INT:
++      case ST_UINT:
++      case ST_SIZE:
++      case ST_FLOAT:
++      case ST_STRING_OPTIONS:
++         state->can_adjust = true;
++         break;
++      default:
++         state->can_adjust = entry.type >= MENU_SETTINGS_CORE_OPTION_START
++               && entry.type < MENU_SETTINGS_CHEEVOS_START;
++         break;
++   }
++   return true;
++}
++
++bool ozone_accessibility_perform(enum menu_accessibility_gesture gesture)
++{
++   menu_accessibility_state_t state;
++   struct menu_state *menu_st = menu_state_get_ptr();
++   ozone_handle_t *ozone;
++   if (!ozone_accessibility_get_state(&state))
++      return false;
++   ozone = (ozone_handle_t*)menu_st->userdata;
++   menu_st->input_last_time_us = cpu_features_get_time_usec();
++   if (menu_st->flags & MENU_ST_FLAG_SCREENSAVER_ACTIVE)
++   {
++      menu_st->flags &= ~MENU_ST_FLAG_SCREENSAVER_ACTIVE;
++      if (menu_st->driver_ctx->environ_cb)
++         menu_st->driver_ctx->environ_cb(MENU_ENVIRON_DISABLE_SCREENSAVER,
++               NULL, menu_st->userdata);
++   }
++   ozone->flags &= ~OZONE_FLAG_CURSOR_MODE;
++   menu_st->scroll.acceleration = 0;
++   return menu_accessibility_queue_action(menu_accessibility_action(&state, gesture));
++}
++
+ static void ozone_menu_animation_update_time(
+       float *ticker_pixel_increment,
+       unsigned video_width,
+diff --git a/menu/menu_accessibility.h b/menu/menu_accessibility.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..33f5e8f080f56b6411ee3ff436aae23e68f49b47
+--- /dev/null
++++ b/menu/menu_accessibility.h
+@@ -0,0 +1,99 @@
++/* RetroArch - A frontend for libretro.
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++#ifndef RETROARCH_MENU_ACCESSIBILITY_H
++#define RETROARCH_MENU_ACCESSIBILITY_H
++
++#include <stddef.h>
++#include <boolean.h>
++#include <retro_inline.h>
++#include "menu_defines.h"
++
++RETRO_BEGIN_DECLS
++
++enum menu_accessibility_gesture
++{
++   MENU_ACCESS_PREVIOUS,
++   MENU_ACCESS_NEXT,
++   MENU_ACCESS_ENTER,
++   MENU_ACCESS_BACK,
++   MENU_ACCESS_ACTIVATE,
++   MENU_ACCESS_INCREASE,
++   MENU_ACCESS_DECREASE
++};
++
++typedef struct menu_accessibility_state
++{
++   char title[512];
++   char label[512];
++   char value[512];
++   char help[512];
++   size_t position;
++   size_t count;
++   size_t depth;
++   bool category;
++   bool can_enter;
++   bool can_adjust;
++   bool message;
++} menu_accessibility_state_t;
++
++/* Resolve a completed gesture without holding or repeating any game input.
++ * Enter and activate deliberately differ for terminal commands. */
++static INLINE enum menu_action menu_accessibility_action(
++      const menu_accessibility_state_t *state,
++      enum menu_accessibility_gesture gesture)
++{
++   if (!state)
++      return MENU_ACTION_NOOP;
++   if (state->message)
++      return (gesture == MENU_ACCESS_BACK || gesture == MENU_ACCESS_ACTIVATE)
++            ? MENU_ACTION_CANCEL : MENU_ACTION_NOOP;
++   if (gesture == MENU_ACCESS_BACK)
++      return state->category ? MENU_ACTION_NOOP :
++            (state->depth > 1 ? MENU_ACTION_CANCEL : MENU_ACTION_LEFT);
++   if (!state->count)
++      return MENU_ACTION_NOOP;
++   switch (gesture)
++   {
++      case MENU_ACCESS_PREVIOUS:
++         return MENU_ACTION_UP;
++      case MENU_ACCESS_NEXT:
++         return MENU_ACTION_DOWN;
++      case MENU_ACCESS_ENTER:
++         return state->category ? MENU_ACTION_RIGHT :
++               (state->can_enter ? MENU_ACTION_OK : MENU_ACTION_NOOP);
++      case MENU_ACCESS_ACTIVATE:
++         return state->category ? MENU_ACTION_RIGHT : MENU_ACTION_OK;
++      case MENU_ACCESS_INCREASE:
++         return !state->category && state->can_adjust
++               ? MENU_ACTION_RIGHT : MENU_ACTION_NOOP;
++      case MENU_ACCESS_DECREASE:
++         return !state->category && state->can_adjust
++               ? MENU_ACTION_LEFT : MENU_ACTION_NOOP;
++      default:
++         return MENU_ACTION_NOOP;
++   }
++}
++
++/* One pending gesture, consumed by the normal menu frame. Physical input wins
++ * a simultaneous conflict so a delayed activation cannot hit a new selection. */
++static INLINE enum menu_action menu_accessibility_take_action(
++      enum menu_action *pending, enum menu_action physical, bool allowed)
++{
++   enum menu_action gesture = *pending;
++   *pending = MENU_ACTION_NOOP;
++   return allowed && physical == MENU_ACTION_NOOP ? gesture : physical;
++}
++
++bool menu_accessibility_queue_action(enum menu_action action);
++void menu_accessibility_cancel_action(void);
++/* HELP/INFO are identified from the menu stack, not transient render flags. */
++bool menu_accessibility_dialog_active(void);
++
++#ifdef HAVE_OZONE
++bool ozone_accessibility_get_state(menu_accessibility_state_t *state);
++bool ozone_accessibility_perform(enum menu_accessibility_gesture gesture);
++#endif
++
++RETRO_END_DECLS
++#endif
+diff --git a/menu/menu_cbs.h b/menu/menu_cbs.h
+index 67c8f412560bdebbd7b3c259dd77bd1cb3f05473..7db62be62c5f43364ed0fa61e825dc081ba1532a 100644
+--- a/menu/menu_cbs.h
++++ b/menu/menu_cbs.h
+@@ -33,6 +33,10 @@
+ 
+ RETRO_BEGIN_DECLS
+ 
++/* True only for OK callbacks known to open navigation, without executing an
++ * item command. A displayed "More" marker is not sufficient for this. */
++bool menu_cbs_ok_is_navigation(const menu_file_list_cbs_t *cbs);
++
+ enum
+ {
+    ACTION_OK_DL_DEFAULT = 0,
+diff --git a/menu/menu_driver.c b/menu/menu_driver.c
+index a4b23c10ab3b3314b14599dcb15ec2c249bc9f69..95bed31977e173bc4167fbc8b1a0c7200cb6f5f1 100644
+--- a/menu/menu_driver.c
++++ b/menu/menu_driver.c
+@@ -45,6 +45,7 @@
+ #include "../audio/audio_driver.h"
+ 
+ #include "menu_driver.h"
++#include "menu_accessibility.h"
+ #include "menu_cbs.h"
+ #include "../driver.h"
+ #include "../list_special.h"
+@@ -3339,6 +3340,16 @@ static enum action_iterate_type action_iterate_type(const char *label)
+ 
+ /* Returns true if search filter is enabled
+  * for the specified menu list */
++bool menu_accessibility_dialog_active(void)
++{
++   struct menu_state *menu_st = menu_state_get_ptr();
++   file_list_t *stack = menu_st->entries.list ? MENU_LIST_GET(menu_st->entries.list, 0) : NULL;
++   enum action_iterate_type type = stack && stack->size
++         ? action_iterate_type(stack->list[stack->size - 1].label)
++         : ITERATE_TYPE_DEFAULT;
++   return type == ITERATE_TYPE_HELP || type == ITERATE_TYPE_INFO;
++}
++
+ bool menu_driver_search_filter_enabled(const char *label, unsigned type)
+ {
+    bool filter_enabled = false;
+@@ -8149,6 +8160,21 @@ int generic_menu_entry_action(
+ }
+ 
+ /* Iterate the menu driver for one frame. */
++static enum menu_action menu_accessibility_pending_action = MENU_ACTION_NOOP;
++
++bool menu_accessibility_queue_action(enum menu_action action)
++{
++   if (menu_accessibility_pending_action != MENU_ACTION_NOOP)
++      return false;
++   menu_accessibility_pending_action = action;
++   return action != MENU_ACTION_NOOP;
++}
++
++void menu_accessibility_cancel_action(void)
++{
++   menu_accessibility_pending_action = MENU_ACTION_NOOP;
++}
++
+ bool menu_driver_iterate(
+       struct menu_state *menu_st,
+       gfx_display_t *p_disp,
+@@ -8157,6 +8183,32 @@ bool menu_driver_iterate(
+       enum menu_action action,
+       retro_time_t current_time)
+ {
++   bool assistive_action = menu_accessibility_pending_action != MENU_ACTION_NOOP
++         && action == MENU_ACTION_NOOP;
++   action = menu_accessibility_take_action(&menu_accessibility_pending_action,
++         action, (menu_st->flags & MENU_ST_FLAG_ALIVE)
++               && !(menu_st->flags & (MENU_ST_FLAG_BLOCK_ALL_INPUT
++                  | MENU_ST_FLAG_IS_BINDING | MENU_ST_FLAG_INP_DLG_KB_DISPLAY)));
++   /* An actually empty list has no selected-entry cancel callback. Preserve
++    * the ordinary search/pop behavior instead of trapping assistive navigation. */
++   if (assistive_action && action == MENU_ACTION_CANCEL
++         && !menu_accessibility_dialog_active() && menu_st->entries.list)
++   {
++      file_list_t *list = MENU_LIST_GET_SELECTION(menu_st->entries.list, 0);
++      file_list_t *stack = MENU_LIST_GET(menu_st->entries.list, 0);
++      if ((!list || !list->size) && stack && stack->size > 1)
++      {
++         action_cancel_pop_default(NULL, NULL, 0, 0);
++         if (MENU_ENTRIES_NEEDS_REFRESH(menu_st))
++         {
++            menu_driver_displaylist_push(menu_st, settings,
++                  MENU_LIST_GET_SELECTION(menu_st->entries.list, 0),
++                  MENU_LIST_GET(menu_st->entries.list, 0));
++            menu_st->flags &= ~MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
++         }
++         action = MENU_ACTION_ACCESSIBILITY_SPEAK_TITLE_LABEL;
++      }
++   }
+    return ( menu_st->driver_data
+          && generic_menu_iterate(
+             menu_st,
 diff --git a/retroarch.c b/retroarch.c
-index b167283..4de0123 100644
+index b16728310b0112e251ff45ff3115d64e4f869fc1..4de012344aebd4b1b8dc688530a4e02b43f27c70 100644
 --- a/retroarch.c
 +++ b/retroarch.c
 @@ -8813,10 +8813,43 @@ void retroarch_favorites_deinit(void)
@@ -531,7 +968,7 @@ index b167283..4de0123 100644
 +
  #endif
 diff --git a/runloop.c b/runloop.c
-index 679517b..2606514 100644
+index 679517b280af602969d9bb7f72d0e91a061761ee..26065148e7682853fbc31f88a60c5137bda1b466 100644
 --- a/runloop.c
 +++ b/runloop.c
 @@ -1745,6 +1745,63 @@ bool runloop_environment_cb(unsigned cmd, void *data)
@@ -598,3 +1035,483 @@ index 679517b..2606514 100644
        case RETRO_ENVIRONMENT_SET_MESSAGE_EXT:
        {
           const struct retro_message_ext *msg =
+diff --git a/tests/menu_accessibility/test_actions.c b/tests/menu_accessibility/test_actions.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb5b19f8f1a8667ab5ccf165d0acb27b84b03dc2
+--- /dev/null
++++ b/tests/menu_accessibility/test_actions.c
+@@ -0,0 +1,59 @@
++#include <assert.h>
++#include <stdio.h>
++#include "../../menu/menu_accessibility.h"
++
++int main(void)
++{
++   menu_accessibility_state_t s = {0};
++   enum menu_action pending;
++   s.category = true;
++   s.count = 4;
++   s.depth = 1;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_PREVIOUS) == MENU_ACTION_UP);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_NEXT) == MENU_ACTION_DOWN);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ENTER) == MENU_ACTION_RIGHT);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ACTIVATE) == MENU_ACTION_RIGHT);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_BACK) == MENU_ACTION_NOOP);
++
++   s.category = false;
++   s.can_enter = false; /* Save Current Configuration must not run on a flick. */
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ENTER) == MENU_ACTION_NOOP);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ACTIVATE) == MENU_ACTION_OK);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_BACK) == MENU_ACTION_LEFT);
++   s.can_enter = true; /* Configuration submenu. */
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ENTER) == MENU_ACTION_OK);
++   s.depth = 3;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_BACK) == MENU_ACTION_CANCEL);
++
++   s.count = 0; /* Empty directory/playlist must remain escapable. */
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ACTIVATE) == MENU_ACTION_NOOP);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ENTER) == MENU_ACTION_NOOP);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_NEXT) == MENU_ACTION_NOOP);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_BACK) == MENU_ACTION_CANCEL);
++   s.depth = 1;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_BACK) == MENU_ACTION_LEFT);
++
++   s.count = 2;
++   s.depth = 2;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_INCREASE) == MENU_ACTION_NOOP);
++   s.can_adjust = true;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_INCREASE) == MENU_ACTION_RIGHT);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_DECREASE) == MENU_ACTION_LEFT);
++   s.category = true;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_INCREASE) == MENU_ACTION_NOOP);
++   assert(menu_accessibility_action(NULL, MENU_ACCESS_ACTIVATE) == MENU_ACTION_NOOP);
++   s.message = true;
++   assert(menu_accessibility_action(&s, MENU_ACCESS_ACTIVATE) == MENU_ACTION_CANCEL);
++   assert(menu_accessibility_action(&s, MENU_ACCESS_NEXT) == MENU_ACTION_NOOP);
++   pending = MENU_ACTION_OK;
++   assert(menu_accessibility_take_action(&pending, MENU_ACTION_NOOP, true) == MENU_ACTION_OK);
++   assert(menu_accessibility_take_action(&pending, MENU_ACTION_NOOP, true) == MENU_ACTION_NOOP);
++   pending = MENU_ACTION_OK;
++   assert(menu_accessibility_take_action(&pending, MENU_ACTION_DOWN, true) == MENU_ACTION_DOWN);
++   assert(menu_accessibility_take_action(&pending, MENU_ACTION_NOOP, true) == MENU_ACTION_NOOP);
++   pending = MENU_ACTION_OK;
++   assert(menu_accessibility_take_action(&pending, MENU_ACTION_NOOP, false) == MENU_ACTION_NOOP);
++   assert(menu_accessibility_take_action(&pending, MENU_ACTION_NOOP, true) == MENU_ACTION_NOOP);
++   puts("PASS: category navigation, enter/activate separation, empty-list escape, value adjustment");
++   return 0;
++}
+diff --git a/ui/drivers/cocoa/cocoa_accessibility.h b/ui/drivers/cocoa/cocoa_accessibility.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..0194ee2db7bae31d9ffb535f0b64f4ed4c2bf38e
+--- /dev/null
++++ b/ui/drivers/cocoa/cocoa_accessibility.h
+@@ -0,0 +1,10 @@
++/* RetroArch - A frontend for libretro. SPDX-License-Identifier: GPL-3.0-or-later */
++#ifndef RETROARCH_COCOA_ACCESSIBILITY_H
++#define RETROARCH_COCOA_ACCESSIBILITY_H
++
++#if defined(HAVE_COCOATOUCH) && TARGET_OS_IOS && defined(HAVE_MENU) && defined(HAVE_OZONE)
++#import <UIKit/UIKit.h>
++void cocoa_accessibility_update(UIViewController *controller);
++BOOL cocoa_accessibility_owns_touch(UITouch *touch);
++#endif
++#endif
+diff --git a/ui/drivers/cocoa/cocoa_accessibility.m b/ui/drivers/cocoa/cocoa_accessibility.m
+new file mode 100644
+index 0000000000000000000000000000000000000000..679d7841e83273c3b0b6a9d297f53ca2b5e24790
+--- /dev/null
++++ b/ui/drivers/cocoa/cocoa_accessibility.m
+@@ -0,0 +1,330 @@
++/* RetroArch - A frontend for libretro. SPDX-License-Identifier: GPL-3.0-or-later */
++#import "cocoa_common.h"
++#import "cocoa_accessibility.h"
++
++#if defined(HAVE_COCOATOUCH) && TARGET_OS_IOS && defined(HAVE_MENU) && defined(HAVE_OZONE)
++#include "../../../menu/menu_accessibility.h"
++#include "../../../menu/menu_driver.h"
++#include "../../../accessibility.h"
++#include "../../../input/drivers/cocoa_input.h"
++
++static NSString *RAMenuString(const char *text)
++{
++   return text ? ([NSString stringWithUTF8String:text] ?: @"") : @"";
++}
++
++static NSString *RAMenuGestureHelp(void)
++{
++   return @"Swipe up or down to browse categories or items. Swipe right to enter. "
++          @"Swipe left to go back. Double-tap to activate. "
++          @"Swipe left or right with two fingers to change a setting's value. "
++          @"Tap once to read the selection. Long-press for help.";
++}
++
++@interface RAMenuAccessibilityView : UIView <UIGestureRecognizerDelegate>
++@property(nonatomic, assign) UIViewController *menuController;
++@property(nonatomic, assign) BOOL keyboardVisible;
++@property(nonatomic, assign) BOOL menuSession;
++- (BOOL)available;
++- (void)refresh;
++- (BOOL)perform:(enum menu_accessibility_gesture)gesture;
++- (void)disable;
++@end
++
++static RAMenuAccessibilityView *ra_menu_accessibility_view;
++
++@implementation RAMenuAccessibilityView
++- (instancetype)initWithFrame:(CGRect)frame
++{
++   if (!(self = [super initWithFrame:frame]))
++      return nil;
++   self.backgroundColor = UIColor.clearColor;
++   self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
++   self.isAccessibilityElement = YES;
++   self.accessibilityTraits = UIAccessibilityTraitAllowsDirectInteraction;
++   self.accessibilityViewIsModal = YES;
++   self.accessibilityIdentifier = @"retroarch.voiceover.menu";
++   self.accessibilityHint = RAMenuGestureHelp();
++   self.hidden = YES;
++#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 170000
++   if (@available(iOS 17.0, *))
++      self.accessibilityDirectTouchOptions = UIAccessibilityDirectTouchOptionSilentOnTouch;
++#endif
++
++   const UISwipeGestureRecognizerDirection directions[] = {
++      UISwipeGestureRecognizerDirectionUp, UISwipeGestureRecognizerDirectionDown,
++      UISwipeGestureRecognizerDirectionLeft, UISwipeGestureRecognizerDirectionRight
++   };
++   for (unsigned i = 0; i < 4; ++i)
++   {
++      UISwipeGestureRecognizer *swipe = [[UISwipeGestureRecognizer alloc]
++            initWithTarget:self action:@selector(swiped:)];
++      swipe.direction = directions[i];
++      swipe.numberOfTouchesRequired = 1;
++      swipe.delegate = self;
++      [self addGestureRecognizer:swipe];
++   }
++   for (unsigned i = 2; i < 4; ++i)
++   {
++      UISwipeGestureRecognizer *swipe = [[UISwipeGestureRecognizer alloc]
++            initWithTarget:self action:@selector(adjusted:)];
++      swipe.direction = directions[i];
++      swipe.numberOfTouchesRequired = 2;
++      swipe.delegate = self;
++      [self addGestureRecognizer:swipe];
++   }
++   UITapGestureRecognizer *activate = [[UITapGestureRecognizer alloc]
++         initWithTarget:self action:@selector(tappedTwice:)];
++   activate.numberOfTapsRequired = 2;
++   activate.delegate = self;
++   [self addGestureRecognizer:activate];
++   UITapGestureRecognizer *read = [[UITapGestureRecognizer alloc]
++         initWithTarget:self action:@selector(tappedOnce:)];
++   read.delegate = self;
++   [read requireGestureRecognizerToFail:activate];
++   [self addGestureRecognizer:read];
++   UILongPressGestureRecognizer *help = [[UILongPressGestureRecognizer alloc]
++         initWithTarget:self action:@selector(held:)];
++   help.delegate = self;
++   [self addGestureRecognizer:help];
++
++   self.accessibilityCustomActions = @[
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Previous item or category" target:self selector:@selector(previous)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Next item or category" target:self selector:@selector(next)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Enter submenu" target:self selector:@selector(enter)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Back" target:self selector:@selector(back)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Activate selected item" target:self selector:@selector(activateItem)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Increase value" target:self selector:@selector(increase)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Decrease value" target:self selector:@selector(decrease)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Read selection" target:self selector:@selector(readSelection)],
++      [[UIAccessibilityCustomAction alloc] initWithName:@"Menu gesture help" target:self selector:@selector(readHelp)]
++   ];
++   NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
++   [center addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
++   [center addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
++   [center addObserver:self selector:@selector(suspend:) name:UIApplicationWillResignActiveNotification object:nil];
++   [center addObserver:self selector:@selector(suspend:) name:UIAccessibilityVoiceOverStatusDidChangeNotification object:nil];
++   return self;
++}
++
++- (void)disable
++{
++   self.hidden = YES;
++   menu_accessibility_cancel_action();
++}
++
++- (void)suspend:(NSNotification *)notification
++{
++   [self disable];
++   self.menuSession = NO;
++}
++- (void)keyboardWillShow:(NSNotification *)notification
++{
++   self.keyboardVisible = YES;
++   [self disable];
++}
++- (void)keyboardWillHide:(NSNotification *)notification
++{
++   self.keyboardVisible = NO;
++}
++
++- (BOOL)available
++{
++   menu_accessibility_state_t state;
++   for (UIViewController *parent = self.menuController; parent; parent = parent.parentViewController)
++      if (parent.presentedViewController)
++         return NO;
++   return UIAccessibilityIsVoiceOverRunning()
++         && UIApplication.sharedApplication.applicationState == UIApplicationStateActive
++         && self.menuController && self.menuController.isViewLoaded
++         && self.menuController.view.window && !self.menuController.view.hidden
++         && !self.menuController.presentedViewController && !self.keyboardVisible
++         && ozone_accessibility_get_state(&state);
++}
++
++- (void)speak:(NSString *)text
++{
++   if (![self available] || !text.length)
++      return;
++#ifdef HAVE_ACCESSIBILITY
++   settings_t *settings = config_get_ptr();
++   if (accessibility_speak_priority(true,
++         settings->uints.accessibility_narrator_speech_speed, text.UTF8String, 10))
++      return;
++#endif
++   UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, text);
++}
++
++- (void)refresh
++{
++   menu_accessibility_state_t state;
++   if (![self available] || !ozone_accessibility_get_state(&state))
++   {
++      [self disable];
++      if (!(menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE))
++         self.menuSession = NO;
++      return;
++   }
++   BOOL appeared = self.hidden;
++   if (!self.menuSession)
++   {
++      self.menuSession = YES;
++      /* Start with categories on the main screen, retain nested Quick Menu. */
++      if (state.depth == 1 && !state.category && !state.message)
++         ozone_accessibility_perform(MENU_ACCESS_BACK);
++   }
++   self.hidden = NO;
++   [self.superview bringSubviewToFront:self];
++   NSString *label = RAMenuString(state.label);
++   if (!label.length)
++      label = state.count ? RAMenuString(state.title) : @"Empty list";
++   NSString *value = RAMenuString(state.value);
++   NSString *position = state.count ? [NSString stringWithFormat:@"%lu of %lu",
++         (unsigned long)state.position + 1, (unsigned long)state.count] : @"";
++   if (state.category)
++      value = [NSString stringWithFormat:@"Category, %@", position];
++   else if (position.length)
++      value = value.length ? [NSString stringWithFormat:@"%@, %@", value, position] : position;
++   BOOL changed = ![self.accessibilityLabel isEqualToString:label]
++         || ![self.accessibilityValue isEqualToString:value];
++   self.accessibilityLabel = label;
++   self.accessibilityValue = value;
++
++   if (appeared)
++   {
++      /* Focus once when entering the menu, never on each selection. Focusing
++       * this surface only reads it; it never executes the selected command. */
++      UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, self);
++   }
++#ifdef HAVE_ACCESSIBILITY
++   else if (changed && !is_accessibility_enabled(config_get_ptr()->bools.accessibility_enable,
++         access_state_get_ptr()->enabled))
++#else
++   else if (changed)
++#endif
++      UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification,
++            [NSString stringWithFormat:@"%@. %@", label, value]);
++}
++
++- (BOOL)perform:(enum menu_accessibility_gesture)gesture
++{
++   menu_accessibility_state_t state;
++   if (![self available] || !ozone_accessibility_get_state(&state))
++      return NO;
++   if (menu_accessibility_action(&state, gesture) == MENU_ACTION_NOOP)
++   {
++      if (gesture == MENU_ACCESS_ENTER && state.count && !state.message)
++         [self speak:@"Double-tap to activate this item."];
++      else if (gesture == MENU_ACCESS_INCREASE || gesture == MENU_ACCESS_DECREASE)
++         [self speak:@"This item has no adjustable value. Double-tap to activate."];
++      else
++         [self readSelection];
++      return YES;
++   }
++   return ozone_accessibility_perform(gesture);
++}
++
++- (void)swiped:(UISwipeGestureRecognizer *)recognizer
++{
++   if (recognizer.state != UIGestureRecognizerStateRecognized)
++      return;
++   switch (recognizer.direction)
++   {
++      case UISwipeGestureRecognizerDirectionUp: [self previous]; break;
++      case UISwipeGestureRecognizerDirectionDown: [self next]; break;
++      case UISwipeGestureRecognizerDirectionLeft: [self back]; break;
++      case UISwipeGestureRecognizerDirectionRight: [self enter]; break;
++      default: break;
++   }
++}
++- (void)adjusted:(UISwipeGestureRecognizer *)recognizer
++{
++   if (recognizer.state == UIGestureRecognizerStateRecognized)
++      [self perform:recognizer.direction == UISwipeGestureRecognizerDirectionRight
++            ? MENU_ACCESS_INCREASE : MENU_ACCESS_DECREASE];
++}
++- (void)tappedTwice:(UITapGestureRecognizer *)recognizer
++{
++   if (recognizer.state == UIGestureRecognizerStateRecognized)
++      [self activateItem];
++}
++- (void)tappedOnce:(UITapGestureRecognizer *)recognizer
++{
++   if (recognizer.state == UIGestureRecognizerStateRecognized)
++      [self readSelection];
++}
++- (void)held:(UILongPressGestureRecognizer *)recognizer
++{
++   if (recognizer.state == UIGestureRecognizerStateBegan)
++      [self readHelp];
++}
++- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer
++{
++   return [self available];
++}
++- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
++      shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other
++{
++   return NO;
++}
++
++- (BOOL)previous { return [self perform:MENU_ACCESS_PREVIOUS]; }
++- (BOOL)next { return [self perform:MENU_ACCESS_NEXT]; }
++- (BOOL)enter { return [self perform:MENU_ACCESS_ENTER]; }
++- (BOOL)back { return [self perform:MENU_ACCESS_BACK]; }
++- (BOOL)activateItem { return [self perform:MENU_ACCESS_ACTIVATE]; }
++- (BOOL)increase { return [self perform:MENU_ACCESS_INCREASE]; }
++- (BOOL)decrease { return [self perform:MENU_ACCESS_DECREASE]; }
++- (BOOL)accessibilityActivate { return [self activateItem]; }
++- (BOOL)accessibilityPerformEscape { return [self back]; }
++- (void)accessibilityIncrement { [self next]; }
++- (void)accessibilityDecrement { [self previous]; }
++- (BOOL)readSelection
++{
++   if (![self available])
++      return NO;
++   [self speak:[NSString stringWithFormat:@"%@. %@", self.accessibilityLabel, self.accessibilityValue]];
++   return YES;
++}
++- (BOOL)readHelp
++{
++   menu_accessibility_state_t state;
++   if (![self available] || !ozone_accessibility_get_state(&state))
++      return NO;
++   [self speak:[NSString stringWithFormat:@"%@. %@", RAMenuString(state.help), RAMenuGestureHelp()]];
++   return YES;
++}
++@end
++
++void cocoa_accessibility_update(UIViewController *controller)
++{
++   if (!controller || !controller.isViewLoaded)
++      return;
++   if (!ra_menu_accessibility_view && UIAccessibilityIsVoiceOverRunning())
++   {
++      ra_menu_accessibility_view = [[RAMenuAccessibilityView alloc] initWithFrame:controller.view.bounds];
++      ra_menu_accessibility_view.menuController = controller;
++      [controller.view addSubview:ra_menu_accessibility_view];
++   }
++   if (ra_menu_accessibility_view)
++   {
++      BOOL wasHidden = ra_menu_accessibility_view.hidden;
++      [ra_menu_accessibility_view refresh];
++      if (wasHidden && !ra_menu_accessibility_view.hidden)
++      {
++         cocoa_input_data_t *apple = (cocoa_input_data_t*)input_state_get_ptr()->current_data;
++         if (apple)
++            apple->touch_count = 0;
++      }
++   }
++}
++
++BOOL cocoa_accessibility_owns_touch(UITouch *touch)
++{
++   /* Ownership lasts until the touch ends, even if activation closed the menu.
++    * Its ending event must not leak into a game or native keyboard underneath. */
++   return ra_menu_accessibility_view && touch.view
++         && ((!ra_menu_accessibility_view.hidden && [ra_menu_accessibility_view available])
++            || [touch.view isDescendantOfView:ra_menu_accessibility_view]);
++}
++#endif
+diff --git a/ui/drivers/cocoa/cocoa_common.m b/ui/drivers/cocoa/cocoa_common.m
+index dc9f5650005a485ebd9407ac1efa167f722bdde2..91dca771756ce4844b7a0b106a1057a46b98f745 100644
+--- a/ui/drivers/cocoa/cocoa_common.m
++++ b/ui/drivers/cocoa/cocoa_common.m
+@@ -18,6 +18,7 @@
+ #include <sys/stat.h>
+ 
+ #include "cocoa_common.h"
++#include "cocoa_accessibility.h"
+ #include "apple_platform.h"
+ #include "../ui_cocoa.h"
+ #include <compat/apple_compat.h>
+@@ -101,6 +102,9 @@ static void rarch_draw_observer(CFRunLoopObserverRef observer,
+     CFRunLoopActivity activity, void *info)
+ {
+    uint32_t runloop_flags;
++#if defined(HAVE_COCOATOUCH) && TARGET_OS_IOS && defined(HAVE_MENU) && defined(HAVE_OZONE)
++   cocoa_accessibility_update((CocoaView*)nsview_get_ptr());
++#endif
+    int          ret   = runloop_iterate();
+ 
+    if (ret == -1)
+@@ -169,10 +173,17 @@ void rarch_stop_draw_observer(void)
+    if ([[UIApplication sharedApplication] applicationState] != UIApplicationStateActive)
+       return;
+ 
++#if TARGET_OS_IOS && defined(HAVE_MENU) && defined(HAVE_OZONE)
++   cocoa_accessibility_update(self);
++#endif
+    int ret = runloop_iterate();
+ 
+    task_queue_check();
+ 
++#if TARGET_OS_IOS && defined(HAVE_MENU) && defined(HAVE_OZONE)
++   cocoa_accessibility_update(self);
++#endif
++
+    if (ret == -1)
+    {
+       main_exit(NULL);
+diff --git a/ui/drivers/ui_cocoatouch.m b/ui/drivers/ui_cocoatouch.m
+index 77d1ea608f12cc5e1b716f2b27d02994c69aa3f4..7fb780f923174c10df028f31763143fc5cf4ae05 100644
+--- a/ui/drivers/ui_cocoatouch.m
++++ b/ui/drivers/ui_cocoatouch.m
+@@ -26,6 +26,7 @@
+ #include <retro_timers.h>
+ 
+ #include "cocoa/cocoa_common.h"
++#include "cocoa/cocoa_accessibility.h"
+ #include "cocoa/apple_platform.h"
+ #include "../ui_companion_driver.h"
+ #include "../../audio/audio_driver.h"
+@@ -205,6 +206,10 @@ static void handle_touch_event(NSArray* touches)
+    for (i = 0; i < touches.count && (apple->touch_count < MAX_TOUCHES); i++)
+    {
+       UITouch      *touch = [touches objectAtIndex:i];
++#if TARGET_OS_IOS && defined(HAVE_MENU) && defined(HAVE_OZONE)
++      if (cocoa_accessibility_owns_touch(touch))
++         continue;
++#endif
+       CGPoint       coord = [touch locationInView:[touch view]];
+       if (touch.phase != UITouchPhaseEnded && touch.phase != UITouchPhaseCancelled)
+       {
