@@ -39,6 +39,32 @@ index e96d2f3..bf9a5c8 100644
 +endif()
 +
  dump_cmake_variables()
+diff --git a/cmake/ConfigureDependencies.cmake b/cmake/ConfigureDependencies.cmake
+index 6243e80..16237b2 100644
+--- a/cmake/ConfigureDependencies.cmake
++++ b/cmake/ConfigureDependencies.cmake
+@@ -1,6 +1,14 @@
+ include(cmake/libretro-common.cmake)
+ include(cmake/libslirp.cmake)
+ 
++# fmt 11.2.0 uses malloc/free in format.h without including <cstdlib>. Modern
++# Android libc++ no longer provides those declarations through other headers.
++# Supply the missing header to fmt and its C++ consumers, retaining the pinned
++# dependency sources and avoiding a C++ header in C translation units.
++if (ANDROID)
++    target_compile_options(fmt PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdlib>")
++endif()
++
+ if (HAVE_OPENGL OR HAVE_OPENGLES)
+     # Ensure that melonDS can find libretro's headers...
+     target_include_directories(core SYSTEM PRIVATE "${libretro-common_SOURCE_DIR}/include")
+@@ -38,4 +46,4 @@ add_common_definitions(core)
+ if (HAVE_NETWORKING)
+     # Ensure that the visibility attributes are defined
+     target_compile_definitions(core PUBLIC BUILDING_LIBSLIRP)
+-endif()
+\ No newline at end of file
++endif()
 diff --git a/melondsds_libretro.info.in b/melondsds_libretro.info.in
 index 30bd267..ce34ed8 100644
 --- a/melondsds_libretro.info.in
@@ -53,7 +79,7 @@ index 30bd267..ce34ed8 100644
  categories = "Emulator"
  corename = "${MELONDSDS_NAME}"
 diff --git a/src/libretro/CMakeLists.txt b/src/libretro/CMakeLists.txt
-index 0ed8016..e0e789b 100644
+index 0ed8016..e982bc2 100644
 --- a/src/libretro/CMakeLists.txt
 +++ b/src/libretro/CMakeLists.txt
 @@ -18,6 +18,9 @@ if (ENABLE_LTO)
@@ -84,6 +110,22 @@ index 0ed8016..e0e789b 100644
  embed_binaries(libretro-assets
      ASSET
          NAME "melondsds_vertex_shader"
+@@ -255,6 +269,15 @@ if (APPLE)
+     set_target_properties(melondsds_libretro PROPERTIES SUFFIX ".dylib")
+ elseif(ANDROID)
+     set_target_properties(melondsds_libretro PROPERTIES SUFFIX "_android.so")
++    # The C libretro ABI is the only shared boundary. Keep the static C++ runtime
++    # and core internals local so they cannot interpose another loaded library.
++    target_link_options(melondsds_libretro PRIVATE
++        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libretro_android.map")
++    set_property(TARGET melondsds_libretro APPEND PROPERTY LINK_DEPENDS
++        "${CMAKE_CURRENT_SOURCE_DIR}/libretro_android.map")
++    # ThinLTO generates emulated-TLS descriptors after applying the version map.
++    # Hide their defining static core at compile time as well (NDS::Current).
++    set_target_properties(core PROPERTIES CXX_VISIBILITY_PRESET hidden)
+ elseif (UNIX)
+     set_target_properties(melondsds_libretro PROPERTIES SUFFIX ".so")
+ elseif (WIN32)
 diff --git a/src/libretro/accessibility/CMakeLists.txt b/src/libretro/accessibility/CMakeLists.txt
 new file mode 100644
 index 0000000..2b808c7
@@ -786,10 +828,10 @@ index 0000000..5d73e30
 +}
 diff --git a/src/libretro/accessibility/cart_identity.cpp b/src/libretro/accessibility/cart_identity.cpp
 new file mode 100644
-index 0000000..b10929c
+index 0000000..125c2a7
 --- /dev/null
 +++ b/src/libretro/accessibility/cart_identity.cpp
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,45 @@
 +/*
 +    melonDS DS Access: cartridge identification.
 +
@@ -818,9 +860,12 @@ index 0000000..b10929c
 +}
 +
 +SupportedGame MelonDsDs::access::ClassifyGame(const CartIdentity& id) noexcept {
-+    if (!id.valid || id.revision != 0) return SupportedGame::None;
-+    if (std::strncmp(id.code, "IRBO", 4) == 0) return SupportedGame::Black;
-+    if (std::strncmp(id.code, "IRAO", 4) == 0) return SupportedGame::White;
++    if (!id.valid) return SupportedGame::None;
++    if (id.revision == 0) {
++        if (std::strncmp(id.code, "IRBO", 4) == 0) return SupportedGame::Black;
++        if (std::strncmp(id.code, "IRAO", 4) == 0) return SupportedGame::White;
++    }
++    if (id.revision == 1 && std::strncmp(id.code, "CPUE", 4) == 0) return SupportedGame::Platinum;
 +    return SupportedGame::None;
 +}
 +
@@ -828,20 +873,21 @@ index 0000000..b10929c
 +    switch (game) {
 +        case SupportedGame::Black: return "black";
 +        case SupportedGame::White: return "white";
++        case SupportedGame::Platinum: return "platinum";
 +        default: return "none";
 +    }
 +}
 diff --git a/src/libretro/accessibility/cart_identity.hpp b/src/libretro/accessibility/cart_identity.hpp
 new file mode 100644
-index 0000000..c993a55
+index 0000000..103495c
 --- /dev/null
 +++ b/src/libretro/accessibility/cart_identity.hpp
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,36 @@
 +/*
 +    melonDS DS Access: cartridge identification from the real NDS header.
 +
-+    Only Pokemon Black (IRBO) and Pokemon White (IRAO), ROM revision 0, may activate the reader. Anything
-+    else (other regions, revision 1, Black 2 / White 2, homebrew) is refused before any RAM access.
++    Pokemon Black/White (IRBO/IRAO) revision 0 and Platinum (CPUE) revision 1 may activate the reader.
++    Other regions/revisions and unimplemented games are refused before any RAM access.
 +
 +    This file is part of melonDS DS and is licensed under the GPLv3 or later.
 +*/
@@ -855,6 +901,7 @@ index 0000000..c993a55
 +        None,
 +        Black,
 +        White,
++        Platinum,
 +    };
 +
 +    struct CartIdentity {
@@ -1547,10 +1594,10 @@ index 0000000..5d67044
 +}
 diff --git a/src/libretro/accessibility/lua_reader.cpp b/src/libretro/accessibility/lua_reader.cpp
 new file mode 100644
-index 0000000..7d0b4dd
+index 0000000..8ee6c64
 --- /dev/null
 +++ b/src/libretro/accessibility/lua_reader.cpp
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,647 @@
 +/*
 +    melonDS DS Access: Lua 5.4 host for the Pokemon Black/White reader.
 +
@@ -1683,6 +1730,8 @@ index 0000000..7d0b4dd
 +        {"read_u8", L_mem_read_u8},
 +        {"read_u16_le", L_mem_read_u16},
 +        {"read_u32_le", L_mem_read_u32},
++        {"getmemorydomainlist", L_mem_getmemorydomainlist},
++        {"getmemorydomainsize", L_mem_getmemorydomainsize},
 +        {nullptr, nullptr},
 +    };
 +    static const luaL_Reg emu[] = {
@@ -1960,6 +2009,40 @@ index 0000000..7d0b4dd
 +
 +// ---------------------------------------------------------------------------------------------- memory
 +
++int LuaReader::L_mem_getmemorydomainlist(lua_State* L) {
++    LuaReader& self = Self(L);
++    lua_createtable(L, 2, 0);
++    lua_Integer index = 0; // BizHawk's domain list is zero-indexed.
++    if (self._host.mainRam && self._host.mainRam->Valid()) {
++        lua_pushliteral(L, "Main RAM");
++        lua_rawseti(L, -2, index++);
++    }
++    if (self._host.rom && self._host.rom->Valid()) {
++        lua_pushliteral(L, "ROM");
++        lua_rawseti(L, -2, index);
++    }
++    return 1;
++}
++
++int LuaReader::L_mem_getmemorydomainsize(lua_State* L) {
++    LuaReader& self = Self(L);
++    const BoundedMemory* domain = nullptr;
++    if (lua_isnoneornil(L, 1)) {
++        domain = self._host.mainRam;
++    }
++    else if (lua_type(L, 1) == LUA_TSTRING) {
++        size_t length = 0;
++        const char* text = lua_tolstring(L, 1, &length);
++        std::string_view name(text, length);
++        if (name.empty() || EqualsIgnoreCase(name, "Main RAM")) domain = self._host.mainRam;
++        else if (EqualsIgnoreCase(name, "ROM")) domain = self._host.rom;
++    }
++    // Do not use DomainFor's legacy RAM fallback: an unknown cartridge domain must
++    // never appear available to a reader validating ROM filesystem offsets.
++    lua_pushinteger(L, domain && domain->Valid() ? lua_Integer(domain->Size()) : 0);
++    return 1;
++}
++
 +int LuaReader::L_mem_read_u8(lua_State* L) {
 +    LuaReader& self = Self(L);
 +    uint64_t off = 0;
@@ -2164,10 +2247,10 @@ index 0000000..7d0b4dd
 +}
 diff --git a/src/libretro/accessibility/lua_reader.hpp b/src/libretro/accessibility/lua_reader.hpp
 new file mode 100644
-index 0000000..b3d0c9b
+index 0000000..929c7df
 --- /dev/null
 +++ b/src/libretro/accessibility/lua_reader.hpp
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,144 @@
 +/*
 +    melonDS DS Access: Lua 5.4 host for the Pokemon Black/White reader.
 +
@@ -2177,6 +2260,7 @@ index 0000000..b3d0c9b
 +
 +        mainmemory.read_u8 / read_u16_le / read_u32_le / write_u8 / read_bytes_as_array
 +        memory.read_u8 / read_u16_le / read_u32_le   (domain "ROM" reads the cartridge, else main RAM)
++        memory.getmemorydomainlist / getmemorydomainsize (available "Main RAM" and "ROM" views)
 +        emu.framecount / emu.frameadvance
 +        joypad.getimmediate / set / setfrommnemonicstr / setanalog
 +        input.get
@@ -2278,6 +2362,8 @@ index 0000000..b3d0c9b
 +        static int L_mem_read_u8(lua_State* L);
 +        static int L_mem_read_u16(lua_State* L);
 +        static int L_mem_read_u32(lua_State* L);
++        static int L_mem_getmemorydomainlist(lua_State* L);
++        static int L_mem_getmemorydomainsize(lua_State* L);
 +        static int L_emu_framecount(lua_State* L);
 +        static int L_emu_frameadvance(lua_State* L);
 +        static int L_joypad_getimmediate(lua_State* L);
@@ -3084,7 +3170,7 @@ index 0000000..8984fe5
 +}
 diff --git a/src/libretro/accessibility/reader_session.cpp b/src/libretro/accessibility/reader_session.cpp
 new file mode 100644
-index 0000000..046e1aa
+index 0000000..feb2257
 --- /dev/null
 +++ b/src/libretro/accessibility/reader_session.cpp
 @@ -0,0 +1,233 @@
@@ -3143,7 +3229,7 @@ index 0000000..046e1aa
 +        std::string what = _identity.valid
 +            ? std::string("code ") + _identity.code + ", revision " + std::to_string(_identity.revision)
 +            : std::string("unreadable header");
-+        Log(LogLevel::Info, "reader not available for this cartridge (" + what + "); only IRBO/IRAO revision 0 are supported");
++        Log(LogLevel::Info, "reader not available for this cartridge (" + what + "); supported: IRBO/IRAO revision 0, CPUE revision 1");
 +        if (_speech && _config.readerEnabled) {
 +            _speech->Say("Accessibility reader is not available for this game (" + what + ").", true);
 +        }
@@ -4187,12 +4273,12 @@ index c927cb3..e5ee181 100644
          BitDepth,
 diff --git a/src/libretro/config/definitions/accessibility.hpp b/src/libretro/config/definitions/accessibility.hpp
 new file mode 100644
-index 0000000..a381aaf
+index 0000000..9983d90
 --- /dev/null
 +++ b/src/libretro/config/definitions/accessibility.hpp
 @@ -0,0 +1,140 @@
 +/*
-+    melonDS DS Access: core options for the Pokemon Black/White reader.
++    melonDS DS Access: core options for the Pokemon DS readers.
 +
 +    This file is part of melonDS DS and is licensed under the GPLv3 or later.
 +*/
@@ -4206,18 +4292,18 @@ index 0000000..a381aaf
 +namespace MelonDsDs::config::definitions {
 +    constexpr retro_core_option_v2_definition AccessReader {
 +        config::accessibility::READER,
-+        "Pokemon Black/White Reader",
++        "Pokemon DS Reader",
 +        nullptr,
-+        "Runs the Pokemon Black/White accessibility reader inside the core. "
++        "Runs the Pokemon Black/White or Platinum accessibility reader inside the core. "
 +        "It speaks dialogue, menus, battle information and navigation through your screen reader.\n"
 +        "\n"
-+        "Only Pokemon Black (IRBO) and Pokemon White (IRAO), revision 0, are supported; "
++        "Supports Pokemon Black (IRBO) and White (IRAO), revision 0, and Platinum (CPUE), revision 1; "
 +        "any other game is refused and announced. "
 +        "The reader also needs the Nintendo DS memory layout: in DSi mode it refuses to run and says so, "
 +        "so leave Console Mode set to DS. "
 +        "The reader loads from the \"melondsds_access\" folder next to the core, "
 +        "or from the same folder inside the system directory, with a built-in copy as fallback. "
-+        "Changes take effect at the next content load or reset.",
++        "Close content and load the game again after replacing the reader file.",
 +        nullptr,
 +        config::accessibility::CATEGORY,
 +        {
@@ -4366,7 +4452,7 @@ index 7d64d38..8bb26c0 100644
          Software = 0,
          OpenGl = 1,
 diff --git a/src/libretro/core/core.cpp b/src/libretro/core/core.cpp
-index 20aa716..23d5bb9 100644
+index 20aa716..d4b0ff0 100644
 --- a/src/libretro/core/core.cpp
 +++ b/src/libretro/core/core.cpp
 @@ -30,6 +30,7 @@
@@ -4445,7 +4531,29 @@ index 20aa716..23d5bb9 100644
      _netState.Apply(config);
      _screenLayout.SetDirty();
  
-@@ -922,7 +937,11 @@ bool MelonDsDs::CoreState::Unserialize(std::span<const std::byte> data) noexcept
+@@ -757,7 +772,21 @@ void MelonDsDs::CoreState::InitContent(unsigned type, std::span<const retro_game
+                     throw content_exception("Failed to load the content data, the frontend may have a bug.");
+                 }
+ 
++#ifdef __ANDROID__
++                // RetroArch already retains this ROM for resets when it accepts
++                // persistent_data. Borrow only after confirming that guarantee;
++                // otherwise GameInfo keeps its original owned-copy behavior.
++                const retro_game_info_ext* extendedInfo = nullptr;
++                if (!retro::environment(RETRO_ENVIRONMENT_GET_GAME_INFO_EXT, &extendedInfo)) {
++                    extendedInfo = nullptr;
++                }
++                _ndsInfo.emplace(game[0], extendedInfo);
++                if (_ndsInfo->GetData().data() == game[0].data) {
++                    retro::info("Using {}-byte persistent frontend ROM buffer without a duplicate reload image", game[0].size);
++                }
++#else
+                 _ndsInfo = game[0];
++#endif
+             }
+             break;
+         default:
+@@ -922,7 +951,11 @@ bool MelonDsDs::CoreState::Unserialize(std::span<const std::byte> data) noexcept
          return false;
      }
  
@@ -4571,6 +4679,104 @@ index 6a571be..c299f06 100644
          bool _cycleLayoutButton;
          bool _previousCycleLayoutButton;
          bool _joystickSpeedupCursorButton;
+diff --git a/src/libretro/libretro_android.map b/src/libretro/libretro_android.map
+new file mode 100644
+index 0000000..a460220
+--- /dev/null
++++ b/src/libretro/libretro_android.map
+@@ -0,0 +1,30 @@
++{
++    global:
++        retro_api_version;
++        retro_cheat_reset;
++        retro_cheat_set;
++        retro_deinit;
++        retro_get_memory_data;
++        retro_get_memory_size;
++        retro_get_region;
++        retro_get_system_av_info;
++        retro_get_system_info;
++        retro_init;
++        retro_load_game;
++        retro_load_game_special;
++        retro_reset;
++        retro_run;
++        retro_serialize;
++        retro_serialize_size;
++        retro_set_audio_sample;
++        retro_set_audio_sample_batch;
++        retro_set_controller_port_device;
++        retro_set_environment;
++        retro_set_input_poll;
++        retro_set_input_state;
++        retro_set_video_refresh;
++        retro_unload_game;
++        retro_unserialize;
++    local:
++        *;
++};
+diff --git a/src/libretro/retro/info.cpp b/src/libretro/retro/info.cpp
+index c55aa81..50fd394 100644
+--- a/src/libretro/retro/info.cpp
++++ b/src/libretro/retro/info.cpp
+@@ -19,11 +19,22 @@ Copyright 2023 Jesse Talavera-Greenberg
+ #include <cstring>
+ #include <libretro.h>
+ 
+-retro::GameInfo::GameInfo(const retro_game_info& info) noexcept :
++namespace {
++bool CanBorrow(const retro_game_info& info, const retro_game_info_ext* extended) noexcept {
++    // The frontend must guarantee this exact buffer until retro_deinit returns.
++    // Metadata is still copied, and unsupported/nonpersistent frontends keep the
++    // owned copy needed when a reset recreates the emulated cartridge.
++    return info.data && info.size && extended && extended->persistent_data
++        && extended->data == info.data && extended->size == info.size;
++}
++}
++
++retro::GameInfo::GameInfo(const retro_game_info& info, const retro_game_info_ext* extended) noexcept :
+     _path(info.path ? info.path : ""),
+-    _data(info.data && info.size ? std::make_unique<std::byte[]>(info.size) : nullptr),
++    _data(info.data && info.size && !CanBorrow(info, extended) ? std::make_unique<std::byte[]>(info.size) : nullptr),
+     _size(info.size),
+-    _meta(info.meta ? info.meta : "")
++    _meta(info.meta ? info.meta : ""),
++    _borrowedData(CanBorrow(info, extended) ? static_cast<const std::byte*>(info.data) : nullptr)
+ {
+     if (_data) {
+         memcpy(_data.get(), info.data, info.size);
+diff --git a/src/libretro/retro/info.hpp b/src/libretro/retro/info.hpp
+index f5e8175..61b83b3 100644
+--- a/src/libretro/retro/info.hpp
++++ b/src/libretro/retro/info.hpp
+@@ -25,16 +25,17 @@
+ #include "std/span.hpp"
+ 
+ struct retro_game_info;
++struct retro_game_info_ext;
+ 
+ namespace retro {
+ 
+     class GameInfo {
+     public:
+-        GameInfo(const retro_game_info& info) noexcept;
++        GameInfo(const retro_game_info& info, const retro_game_info_ext* extended = nullptr) noexcept;
+ 
+         std::string_view GetPath() const noexcept { return _path; }
+         std::span<const std::byte> GetData() const noexcept {
+-            return std::span(_data.get(), _size);
++            return std::span(_borrowedData ? _borrowedData : _data.get(), _size);
+         }
+         std::string_view GetMeta() const noexcept { return _meta; }
+     private:
+@@ -42,6 +43,7 @@ namespace retro {
+         std::unique_ptr<std::byte[]> _data;
+         size_t _size;
+         std::string _meta;
++        const std::byte* _borrowedData = nullptr;
+     };
+ 
+ } // retro
 diff --git a/test/accessibility/CMakeLists.txt b/test/accessibility/CMakeLists.txt
 new file mode 100644
 index 0000000..f164f24
@@ -4894,11 +5100,11 @@ index 0000000..799aa28
 +}
 diff --git a/test/accessibility/test_cart_identity.cpp b/test/accessibility/test_cart_identity.cpp
 new file mode 100644
-index 0000000..92562ee
+index 0000000..d4fd19c
 --- /dev/null
 +++ b/test/accessibility/test_cart_identity.cpp
 @@ -0,0 +1,53 @@
-+// Only IRBO / IRAO revision 0 may activate the reader.
++// Exact game-code/revision pairs gate the reader's absolute memory addresses.
 +#include "harness.hpp"
 +
 +#include <cstring>
@@ -4926,7 +5132,7 @@ index 0000000..92562ee
 +    REQUIRE_EQ(unsigned(id.revision), 0u);
 +}
 +
-+TEST_CASE(black_and_white_revision_zero_are_the_only_supported_games) {
++TEST_CASE(black_and_white_revision_zero_gate_rejects_other_versions) {
 +    REQUIRE(ClassifyGame(ReadCartIdentity(Header("IRBO", 0).data(), 0x200)) == SupportedGame::Black);
 +    REQUIRE(ClassifyGame(ReadCartIdentity(Header("IRAO", 0).data(), 0x200)) == SupportedGame::White);
 +    REQUIRE(ClassifyGame(ReadCartIdentity(Header("IRBO", 1).data(), 0x200)) == SupportedGame::None);   // revision 1
@@ -5357,10 +5563,10 @@ index 0000000..25309c5
 +}
 diff --git a/test/accessibility/test_lua_frames.cpp b/test/accessibility/test_lua_frames.cpp
 new file mode 100644
-index 0000000..f91b3b6
+index 0000000..71ed4fe
 --- /dev/null
 +++ b/test/accessibility/test_lua_frames.cpp
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,248 @@
 +// Coroutine timing: exactly one resume per frame, and every way a reader can die is reported.
 +#include "harness.hpp"
 +
@@ -5513,6 +5719,101 @@ index 0000000..f91b3b6
 +    REQUIRE(f.reader.Load(script, "syntax.lua"));
 +    REQUIRE(f.reader.StepFrame(HostInputSnapshot {}) == LuaReader::Status::Running);
 +    REQUIRE_EQ(f.sink.events[0].text, std::string("3 19 15 integer Lua 5.4"));
++}
++
++TEST_CASE(memory_domains_enumerate_available_views_and_report_readable_sizes) {
++    Fixture f;
++    f.ram.back() = 0x5A;
++    f.rom.back() = 0xA5;
++    REQUIRE(f.reader.Load(R"(
++        local domains = memory.getmemorydomainlist()
++        assert(domains[0] == "Main RAM" and domains[1] == "ROM" and domains[2] == nil)
++        local count = 0
++        for _, name in pairs(domains) do
++            count = count + 1
++            local size = memory.getmemorydomainsize(name)
++            assert(math.type(size) == "integer")
++            if name == "ROM" then
++                assert(size == 512 and memory.read_u8(size - 1, name) == 165)
++            else
++                assert(size == 4096 and memory.read_u8(size - 1, name) == 90)
++            end
++        end
++        assert(count == 2)
++        assert(memory.getmemorydomainsize("rom") == 512)
++        assert(memory.getmemorydomainsize("main ram") == 4096)
++        assert(memory.getmemorydomainsize() == 4096)
++        assert(memory.getmemorydomainsize(nil) == 4096)
++        assert(memory.getmemorydomainsize("") == 4096)
++        emu.frameadvance()
++    )", "memory-domains.lua"));
++    f.reader.StepFrame({});
++    REQUIRE_EQ(f.reader.LastError(), std::string());
++    REQUIRE(f.reader.GetStatus() == LuaReader::Status::Running);
++    REQUIRE_EQ(f.reader.BoundsViolations(), uint64_t(0));
++    REQUIRE_EQ(f.reader.RamWrites(), uint64_t(0));
++}
++
++TEST_CASE(memory_domains_unknown_names_do_not_fall_back_to_ram) {
++    Fixture f;
++    REQUIRE(f.reader.Load(R"(
++        for _, name in ipairs({"missing", " ROM", "ROM ", "ROM\0tail", 1, false, {}}) do
++            assert(memory.getmemorydomainsize(name) == 0)
++        end
++        emu.frameadvance()
++    )", "unknown-domain.lua"));
++    f.reader.StepFrame({});
++    REQUIRE_EQ(f.reader.LastError(), std::string());
++    REQUIRE(f.reader.GetStatus() == LuaReader::Status::Running);
++    REQUIRE_EQ(f.reader.RamWrites(), uint64_t(0));
++}
++
++TEST_CASE(memory_domains_missing_or_invalid_views_are_not_advertised) {
++    uint8_t byte = 0;
++    BoundedMemory invalid;
++    BoundedMemory empty(&byte, 0);
++    for (BoundedMemory* view : {static_cast<BoundedMemory*>(nullptr), &invalid, &empty}) {
++        LuaReader reader(ReaderHost {view, view, nullptr, {}});
++        REQUIRE(reader.Load(R"(
++            assert(next(memory.getmemorydomainlist()) == nil)
++            assert(memory.getmemorydomainsize("ROM") == 0)
++            assert(memory.getmemorydomainsize("Main RAM") == 0)
++            assert(memory.getmemorydomainsize() == 0)
++            emu.frameadvance()
++        )", "unavailable-domains.lua"));
++        reader.StepFrame({});
++        REQUIRE_EQ(reader.LastError(), std::string());
++        REQUIRE(reader.GetStatus() == LuaReader::Status::Running);
++    }
++}
++
++TEST_CASE(memory_domains_follow_rebound_views_without_stale_metadata) {
++    Fixture f;
++    REQUIRE(f.reader.Load(R"(
++        assert(memory.getmemorydomainsize("ROM") == 512)
++        emu.frameadvance()
++        local domains = memory.getmemorydomainlist()
++        assert(domains[0] == "ROM" and domains[1] == nil)
++        assert(memory.getmemorydomainsize("ROM") == 17)
++        assert(memory.getmemorydomainsize("Main RAM") == 0)
++        emu.frameadvance()
++        domains = memory.getmemorydomainlist()
++        assert(domains[0] == "Main RAM" and domains[1] == nil)
++        assert(memory.getmemorydomainsize("ROM") == 0)
++        assert(memory.getmemorydomainsize("Main RAM") == 4096)
++        emu.frameadvance()
++    )", "rebound-domains.lua"));
++    REQUIRE(f.reader.StepFrame({}) == LuaReader::Status::Running);
++    f.ramView.Reset();
++    f.romView.Rebind(f.rom.data(), 17, false);
++    f.reader.StepFrame({});
++    REQUIRE_EQ(f.reader.LastError(), std::string());
++    REQUIRE(f.reader.GetStatus() == LuaReader::Status::Running);
++    f.ramView.Rebind(f.ram.data(), f.ram.size(), true);
++    f.romView.Reset();
++    f.reader.StepFrame({});
++    REQUIRE_EQ(f.reader.LastError(), std::string());
++    REQUIRE(f.reader.GetStatus() == LuaReader::Status::Running);
 +}
 diff --git a/test/accessibility/test_main.cpp b/test/accessibility/test_main.cpp
 new file mode 100644
